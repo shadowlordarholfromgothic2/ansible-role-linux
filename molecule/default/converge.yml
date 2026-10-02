@@ -4,13 +4,112 @@
   become: true
 
   vars:
-    template_role_settings:
-      log_level: info
-      listen: "127.0.0.1:8080"
+    # ── Timezone ────────────────────────────────────────────────────────────
+    linux_timezone: Europe/Berlin
+
+    # ── Repositories: the local ones prepare.yml built ─────────────────────
+    linux_apt_keys:
+      - name: molecule
+        url: file:///srv/molecule-repo/molecule.asc
+    linux_apt_repositories:
+      - name: molecule
+        uris: file:/srv/molecule-repo/deb822
+        suites: ["./"]
+        signed_by: /etc/apt/keyrings/molecule.asc
+    linux_apt_repositories_legacy:
+      - filename: molecule-legacy
+        repo: "deb [signed-by=/etc/apt/keyrings/molecule.asc] file:/srv/molecule-repo/legacy ./"
+      - filename: molecule-stale
+        state: absent
+    linux_yum_repositories:
+      - name: molecule
+        baseurl: file:///srv/molecule-repo/rpm
+        gpgcheck: false
+
+    # ── Upgrade and packages ────────────────────────────────────────────────
+    linux_upgrade: true
+    # The probes exist only in the local apt repositories: installing them in
+    # the same run checks that the cache was refreshed after adding them.
+    linux_packages: "{{ _molecule_packages[ansible_facts.os_family] }}"
+    linux_packages_absent: [tree]
+    _molecule_packages:
+      Debian: [jq, cron, molecule-deb822-probe, molecule-legacy-probe]
+      RedHat: [jq, cronie]
+
+    # ── Users ───────────────────────────────────────────────────────────────
+    linux_groups:
+      - {name: molecule, gid: 2500}
+    linux_users:
+      # Exists already (prepare.yml), with a key that has to go.
+      - name: deploy
+        groups: [molecule]
+        ssh_keys:
+          - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINhg4bCGt4W2XZAL22UDPBt9PMGNAUrhTSzAQnAGPRSC deploy-laptop@molecule
+          - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKQC1mqCa0povluSRjalLZx+YSE1NFIhlr3ggT6vtRj6 deploy-ci@molecule
+        ssh_keys_exclusive: true
+        sudo: true
+      # The dot is not allowed in a sudoers.d file name.
+      - name: ops.admin
+        comment: Operator
+        ssh_keys: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE8NvxupRqm16TnuZUTvk1yLmuA041yAY6/1STi9M25b ops-admin@molecule
+        sudo: true
+        sudo_rules:
+          - "ALL=(root) NOPASSWD: /usr/bin/id"
+      - name: svc
+        system: true
+        shell: /usr/sbin/nologin
+        create_home: false
+      # Created by prepare.yml, together with a sudoers drop-in.
+      - name: olduser
+        state: absent
+        remove: true
+    linux_user_passwords:
+      deploy: molecule-s3cret                 # plaintext, hashed by the role
+      ops.admin: "$6$mol3cule$Y2DYiy4JamopYY655npi3rvd/H93TURRCkKFSwnLkQoDqiI88rZj/uiGFxU2rD3XNpR.3MoXN57e2msKES0PE."
+
+    # ── SSH server: non-default values, to see them applied ────────────────
+    linux_sshd_configure: true
+    linux_sshd_permit_root_login: prohibit-password
+    linux_sshd_max_auth_tries: 4
+
+    # ── Storage ─────────────────────────────────────────────────────────────
+    # lvm2 is left out of the tooling: its services would scan the host's
+    # block devices, which a privileged container sees.
+    linux_storage_packages: [parted]
+    linux_filesystems:
+      - {device: /srv/molecule-disk.img, fstype: ext4}
+    linux_mounts:
+      # tmpfs, so that nothing has to be attached to the host.
+      - path: /mnt/molecule
+        src: tmpfs
+        fstype: tmpfs
+        opts: size=16m,noexec
+        owner: deploy
+        group: molecule
+        mode: "0750"
+      - path: /mnt/molecule-later
+        src: tmpfs
+        fstype: tmpfs
+        state: present
+
+    # ── sysctl ──────────────────────────────────────────────────────────────
+    # net.* only: those are per network namespace, i.e. per container. Most
+    # other keys (vm.*, kernel.*) would change the host running the tests.
+    linux_sysctl:
+      net.ipv4.ip_forward: 1
+      net.core.somaxconn: 4096
+    linux_sysctl_absent: [net.ipv4.tcp_fin_timeout]
+
+    # ── ulimits ─────────────────────────────────────────────────────────────
+    linux_limits:
+      - {domain: "*", type: soft, item: nofile, value: 65535, comment: raise the fd limit}
+      - {domain: "@molecule", type: hard, item: nproc, value: 4096}
+    linux_systemd_limits:
+      DefaultLimitNOFILE: "32768:65536"
 
   tasks:
     # Fully qualified (namespace from meta/main.yml): Molecule and ansible-lint
     # link the repo under this name, whatever the checkout directory is called.
     - name: Run the role under test
       ansible.builtin.import_role:
-        name: local.template_role
+        name: homelab.linux
