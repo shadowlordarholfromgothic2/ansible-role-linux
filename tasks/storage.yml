@@ -61,6 +61,7 @@
   loop: "{{ linux_partitions }}"
   loop_control:
     label: "{{ item.device }}p{{ item.number }}"
+  register: linux_partitions_result
 
 # parted only tells the kernel to re-read the partition table; creating the
 # device nodes is udev's job and happens a moment later. Without this wait the
@@ -81,6 +82,10 @@
     label: "{{ item.device }}{{ 'p' if item.device is match('.*[0-9]$') else '' }}{{ item.number }}"
   when: (item.state | default('present')) == 'present'
 
+# In check mode nothing above is really created, so the tasks below cannot find
+# a partition, volume group or logical volume added in this same run, nor a
+# user or group from users.yml. Those items are reported as changed instead of
+# failing, and listed at the end; outside check mode such an error still fails.
 - name: Ensure the LVM volume groups exist
   community.general.lvg:
     vg: "{{ item.vg | default(item.name) }}"
@@ -93,6 +98,13 @@
   loop: "{{ linux_lvm_volume_groups }}"
   loop_control:
     label: "{{ item.vg | default(item.name) }}"
+  register: linux_lvm_volume_groups_result
+  changed_when: linux_lvm_volume_groups_result is changed or _linux_storage_pending
+  failed_when: linux_lvm_volume_groups_result is failed and not _linux_storage_pending
+  vars:
+    _linux_storage_result: "{{ linux_lvm_volume_groups_result }}"
+    # The physical volumes are partitions added above.
+    _linux_storage_created: "{{ linux_partitions_result is changed }}"
 
 - name: Ensure the LVM logical volumes exist
   community.general.lvol:
@@ -111,6 +123,13 @@
   loop: "{{ linux_lvm_volumes }}"
   loop_control:
     label: "{{ item.vg }}/{{ item.lv | default(item.name) }}"
+  register: linux_lvm_volumes_result
+  changed_when: linux_lvm_volumes_result is changed or _linux_storage_pending
+  failed_when: linux_lvm_volumes_result is failed and not _linux_storage_pending
+  vars:
+    _linux_storage_result: "{{ linux_lvm_volumes_result }}"
+    # The volume group is added above.
+    _linux_storage_created: "{{ linux_lvm_volume_groups_result is changed }}"
 
 - name: Create the filesystems
   community.general.filesystem:
@@ -126,6 +145,14 @@
   loop: "{{ linux_filesystems }}"
   loop_control:
     label: "{{ item.device | default(item.dev) }} ({{ item.fstype }})"
+  register: linux_filesystems_result
+  changed_when: linux_filesystems_result is changed or _linux_storage_pending
+  failed_when: linux_filesystems_result is failed and not _linux_storage_pending
+  vars:
+    _linux_storage_result: "{{ linux_filesystems_result }}"
+    # The device is a partition or logical volume added above.
+    _linux_storage_created: >-
+      {{ (linux_partitions_result is changed) or (linux_lvm_volumes_result is changed) }}
 
 - name: Configure the mounts and their fstab entries
   ansible.posix.mount:
@@ -156,3 +183,21 @@
   when:
     - item.state | default('mounted') in ['mounted', 'present']
     - (item.owner is defined) or (item.group is defined) or (item.mode is defined)
+  register: linux_mount_points_result
+  changed_when: linux_mount_points_result is changed or _linux_storage_pending
+  failed_when: linux_mount_points_result is failed and not _linux_storage_pending
+  vars:
+    _linux_storage_result: "{{ linux_mount_points_result }}"
+    # The owner or group is added by users.yml, which is skipped altogether
+    # when there are no users or groups.
+    _linux_storage_created: >-
+      {{ ((linux_groups_result | default({})) is changed)
+         or ((linux_users_result | default({})) is changed) }}
+
+- name: Report the storage check mode could not check
+  ansible.builtin.debug:
+    msg: >-
+      {{ item }} — expected in check mode while an earlier task of this run
+      adds it. Reported as changed without being checked further.
+  loop: "{{ _linux_storage_unchecked }}"
+  when: ansible_check_mode

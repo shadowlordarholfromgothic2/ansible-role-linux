@@ -47,3 +47,22 @@ _linux_packages_unavailable: >-
   {{ _linux_packages_result.failures
        | default([_linux_packages_result.msg | default('')], true)
        | reject('search', '^No package.* available') | list | length == 0 }}
+
+# Whether _linux_storage_result failed only because check mode never really
+# created what it needs: its error says that something does not exist, and
+# _linux_storage_created says the task adding that thing reported a change.
+_linux_storage_pending: >-
+  {{ ansible_check_mode and _linux_storage_created
+     and _linux_storage_result is failed
+     and _linux_storage_result.msg | default('') is search(_linux_storage_missing) }}
+
+# How lvg, lvol, filesystem and file report a missing partition, volume group,
+# logical volume, user or group.
+_linux_storage_missing: '^Device .* not found|^Volume group .* does not exist|failed to look up (user|group)'
+
+# The errors of the storage items let through by _linux_storage_pending.
+_linux_storage_unchecked: >-
+  {{ (linux_lvm_volume_groups_result.results + linux_lvm_volumes_result.results
+      + linux_filesystems_result.results + linux_mount_points_result.results)
+     | selectattr('changed') | map(attribute='msg', default='')
+     | select('search', _linux_storage_missing) | list }}

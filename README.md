@@ -205,6 +205,11 @@ Notes:
 * Mount point ownership is applied after mounting, so it lands on the mounted
   filesystem and not on the directory underneath.
 * `linux_mounts` entries with `state: present` only write the fstab line.
+* In check mode nothing is really created, so a step that needs a partition,
+  volume group or logical volume added in the same run — or a mount point owner
+  or group from `linux_users`/`linux_groups` — cannot find it. Such a step is
+  reported as changed and listed at the end instead of failing, but only when
+  the step that adds it changed something; otherwise it still fails.
 
 ## sysctl
 
