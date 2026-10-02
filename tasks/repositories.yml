@@ -1,0 +1,108 @@
+---
+- name: Configure apt repositories
+  when: ansible_facts.os_family == 'Debian'
+  block:
+    - name: Ensure the apt keyring directory exists
+      ansible.builtin.file:
+        path: "{{ linux_apt_keyring_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: linux_apt_keys | length > 0
+
+    - name: Fetch the repository signing keys
+      ansible.builtin.get_url:
+        url: "{{ item.url }}"
+        dest: "{{ item.dest | default(linux_apt_keyring_dir ~ '/' ~ item.name ~ '.asc') }}"
+        owner: root
+        group: root
+        mode: "0644"
+        force: "{{ item.force | default(false) }}"
+      loop: "{{ linux_apt_keys }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: linux_apt_keys_result
+
+    # deb822_repository parses the .sources files with python3-debian.
+    - name: Ensure the deb822 dependency is installed
+      ansible.builtin.apt:
+        name: python3-debian
+        state: present
+        update_cache: true
+        cache_valid_time: "{{ linux_apt_cache_valid_time }}"
+      when: linux_apt_repositories | length > 0
+
+    - name: Configure the deb822 sources
+      ansible.builtin.deb822_repository:
+        name: "{{ item.name }}"
+        uris: "{{ item.uris | default(omit) }}"
+        types: "{{ item.types | default(omit) }}"
+        suites: "{{ item.suites | default(omit) }}"
+        components: "{{ item.components | default(omit) }}"
+        architectures: "{{ item.architectures | default(omit) }}"
+        signed_by: "{{ item.signed_by | default(omit) }}"
+        enabled: "{{ item.enabled | default(omit) }}"
+        trusted: "{{ item.trusted | default(omit) }}"
+        allow_insecure: "{{ item.allow_insecure | default(omit) }}"
+        mode: "{{ item.mode | default('0644') }}"
+        state: "{{ item.state | default('present') }}"
+      loop: "{{ linux_apt_repositories }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: linux_apt_repositories_result
+
+    # Written directly rather than with apt_repository, which ansible-core
+    # deprecated in 2.21 in favour of deb822_repository.
+    - name: Configure the one-line sources
+      ansible.builtin.copy:
+        content: "{{ item.repo }}\n"
+        dest: "/etc/apt/sources.list.d/{{ item.filename }}.list"
+        owner: root
+        group: root
+        mode: "{{ item.mode | default('0644') }}"
+      loop: "{{ (linux_apt_repositories_legacy | rejectattr('state', 'defined') | list)
+                + (linux_apt_repositories_legacy | selectattr('state', 'defined')
+                   | rejectattr('state', 'equalto', 'absent') | list) }}"
+      loop_control:
+        label: "{{ item.filename }}"
+      register: linux_apt_repositories_legacy_result
+
+    - name: Remove the one-line sources that are no longer wanted
+      ansible.builtin.file:
+        path: "/etc/apt/sources.list.d/{{ item.filename }}.list"
+        state: absent
+      loop: "{{ linux_apt_repositories_legacy | selectattr('state', 'defined')
+                | selectattr('state', 'equalto', 'absent') | list }}"
+      loop_control:
+        label: "{{ item.filename }}"
+      register: linux_apt_repositories_removed_result
+
+    # Done here rather than in a handler: the packages from these repositories
+    # are installed later in this same run.
+    - name: Refresh the apt cache after a repository change
+      ansible.builtin.apt:
+        update_cache: true
+      when: (linux_apt_keys_result is changed) or
+            (linux_apt_repositories_result is changed) or
+            (linux_apt_repositories_legacy_result is changed) or
+            (linux_apt_repositories_removed_result is changed)
+
+- name: Configure the yum repositories
+  ansible.builtin.yum_repository:
+    name: "{{ item.name }}"
+    description: "{{ item.description | default(item.name) }}"
+    baseurl: "{{ item.baseurl | default(omit) }}"
+    mirrorlist: "{{ item.mirrorlist | default(omit) }}"
+    metalink: "{{ item.metalink | default(omit) }}"
+    gpgkey: "{{ item.gpgkey | default(omit) }}"
+    gpgcheck: "{{ item.gpgcheck | default(omit) }}"
+    enabled: "{{ item.enabled | default(true) }}"
+    priority: "{{ item.priority | default(omit) }}"
+    module_hotfixes: "{{ item.module_hotfixes | default(omit) }}"
+    state: "{{ item.state | default('present') }}"
+  loop: "{{ linux_yum_repositories }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: linux_yum_repositories_result
+  when: ansible_facts.os_family == 'RedHat'

@@ -1,0 +1,20 @@
+---
+- name: Apply the sysctl settings
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_file: "{{ linux_sysctl_file }}"
+    sysctl_set: true
+    reload: "{{ linux_sysctl_reload }}"
+    state: present
+  loop: "{{ linux_sysctl | dict2items }}"
+  loop_control:
+    label: "{{ item.key }} = {{ item.value }}"
+
+- name: Drop the sysctl settings that are no longer wanted
+  ansible.posix.sysctl:
+    name: "{{ item }}"
+    sysctl_file: "{{ linux_sysctl_file }}"
+    reload: "{{ linux_sysctl_reload }}"
+    state: absent
+  loop: "{{ linux_sysctl_absent }}"

@@ -1,0 +1,4 @@
+{{ ansible_managed | comment }}
+{% for key, value in _linux_sshd_settings.items() %}
+{{ key }} {{ value | string | lower | regex_replace('^true$', 'yes') | regex_replace('^false$', 'no') }}
+{% endfor %}

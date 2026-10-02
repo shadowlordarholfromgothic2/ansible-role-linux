@@ -1,13 +1,35 @@
 ---
-# Handlers are notified by their `listen` topic, not by their name, so the name
-# can change without breaking the tasks that notify it.
-#
-# TODO: replace the placeholder with the real action, e.g.
-#   ansible.builtin.systemd_service:
-#     name: myservice
-#     state: restarted
+# Cron only reads /etc/localtime when it starts, so a timezone change needs a
+# restart. The service name differs per distribution and may not be installed
+# at all, hence the fact gathering.
+- name: Gather service facts
+  ansible.builtin.service_facts:
+  listen: [Restart cron, Reload sshd]
 
-- name: Apply template_role configuration
-  ansible.builtin.debug:
-    msg: "template_role: configuration changed - TODO: reload the service"
-  listen: template_role config changed
+- name: Restart the cron daemon
+  ansible.builtin.service:
+    name: "{{ item }}"
+    state: restarted
+  loop: "{{ ['cron', 'crond', 'cronie'] }}"
+  when:
+    - linux_timezone_restart_cron | bool
+    - (item ~ '.service') in ansible_facts.services
+    - ansible_facts.services[item ~ '.service'].status | default('') != 'not-found'
+  listen: Restart cron
+
+- name: Reload systemd so the new default limits take effect
+  ansible.builtin.systemd_service:
+    daemon_reexec: true
+  when: ansible_facts.service_mgr == 'systemd'
+  listen: Reexec systemd
+
+# Only a running daemon can be reloaded; a stopped one reads the new file when it
+# starts.
+- name: Reload the SSH daemon
+  ansible.builtin.service:
+    name: "{{ linux_sshd_service }}"
+    state: reloaded
+  when:
+    - (linux_sshd_service ~ '.service') in ansible_facts.services
+    - ansible_facts.services[linux_sshd_service ~ '.service'].state == 'running'
+  listen: Reload sshd

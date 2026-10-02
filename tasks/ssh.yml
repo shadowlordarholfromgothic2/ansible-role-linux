@@ -1,0 +1,42 @@
+---
+- name: Ensure the SSH server is installed
+  ansible.builtin.package:
+    name: "{{ linux_sshd_package }}"
+    state: present
+
+- name: Configure the global sshd settings
+  ansible.builtin.template:
+    src: sshd_config.conf.j2
+    dest: "{{ linux_sshd_config_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+    validate: "{{ linux_sshd_path }} -t -f %s"
+  notify: Reload sshd
+
+# The drop-in only counts if sshd_config includes it before setting the same
+# keywords itself, so check what sshd actually ends up using.
+- name: Read the effective sshd configuration
+  ansible.builtin.command: "{{ linux_sshd_path }} -T"
+  register: linux_sshd_effective
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Check that the sshd settings are in effect
+  ansible.builtin.assert:
+    that: _linux_sshd_line in linux_sshd_effective.stdout_lines
+    fail_msg: >-
+      sshd does not use '{{ _linux_sshd_line }}'. Check that
+      {{ linux_sshd_config_file | dirname }}/*.conf is included at the top of
+      sshd_config and that no earlier file sets {{ item.key }}.
+    quiet: true
+  loop: "{{ _linux_sshd_settings | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  vars:
+    # sshd -T still prints prohibit-password under its old name.
+    _linux_sshd_line: >-
+      {{ item.key | lower }} {{ item.value | string | lower
+         | regex_replace('^true$', 'yes') | regex_replace('^false$', 'no')
+         | regex_replace('^prohibit-password$', 'without-password') }}
+  when: not ansible_check_mode

@@ -1,0 +1,36 @@
+---
+- name: Upgrade all packages (apt)
+  ansible.builtin.apt:
+    upgrade: "{{ linux_upgrade_type }}"
+    update_cache: true
+    cache_valid_time: "{{ linux_apt_cache_valid_time }}"
+    autoremove: "{{ linux_upgrade_autoremove }}"
+  when: ansible_facts.os_family == 'Debian'
+
+- name: Upgrade all packages
+  ansible.builtin.package:
+    name: "*"
+    state: latest # noqa package-latest — an explicit, opt-in full upgrade
+  when: ansible_facts.os_family != 'Debian'
+
+- name: Check whether a reboot is required (Debian)
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: linux_reboot_marker
+  when: ansible_facts.os_family == 'Debian'
+
+- name: Check whether a reboot is required (RedHat)
+  ansible.builtin.command: dnf -q needs-restarting -r
+  register: linux_needs_restarting
+  changed_when: false
+  failed_when: linux_needs_restarting.rc not in [0, 1]
+  when: ansible_facts.os_family == 'RedHat'
+
+- name: Reboot to finish the upgrade
+  ansible.builtin.reboot:
+    reboot_timeout: "{{ linux_reboot_timeout }}"
+    msg: Rebooting after an Ansible package upgrade
+  when:
+    - linux_reboot_if_required | bool
+    - (linux_reboot_marker.stat.exists | default(false)) or
+      (linux_needs_restarting.rc | default(0) == 1)

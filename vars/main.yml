@@ -1,0 +1,49 @@
+---
+# Internal helpers — not meant to be overridden.
+
+_linux_users_present: >-
+  {{ (linux_users | rejectattr('state', 'defined') | list)
+     + (linux_users | selectattr('state', 'defined')
+                    | rejectattr('state', 'equalto', 'absent') | list) }}
+
+_linux_users_absent: >-
+  {{ linux_users | selectattr('state', 'defined')
+                 | selectattr('state', 'equalto', 'absent') | list }}
+
+# Users that get a /etc/sudoers.d drop-in, i.e. those with `sudo: true`.
+_linux_users_sudo: >-
+  {{ _linux_users_present | selectattr('sudo', 'defined') | selectattr('sudo') | list }}
+
+# Users whose drop-in must be gone again: sudo unset/false, or removed users.
+_linux_users_nosudo: >-
+  {{ (_linux_users_present | rejectattr('sudo', 'defined') | list)
+     + (_linux_users_present | selectattr('sudo', 'defined')
+                             | rejectattr('sudo') | list)
+     + (_linux_users_absent | list) }}
+
+_linux_users_ssh_keys: >-
+  {{ _linux_users_present | selectattr('ssh_keys', 'defined') | list }}
+
+# Keyword -> value for the sshd drop-in, in the order they are written.
+_linux_sshd_settings:
+  PubkeyAuthentication: "{{ linux_sshd_pubkey_authentication }}"
+  PasswordAuthentication: "{{ linux_sshd_password_authentication }}"
+  KbdInteractiveAuthentication: "{{ linux_sshd_kbd_interactive_authentication }}"
+  PermitRootLogin: "{{ linux_sshd_permit_root_login }}"
+  MaxAuthTries: "{{ linux_sshd_max_auth_tries }}"
+
+# Whether repositories.yml added or changed a repository in this run. The
+# results are undefined when it was skipped altogether.
+_linux_repositories_changed: >-
+  {{ ((linux_apt_repositories_result | default({})) is changed)
+     or ((linux_apt_repositories_legacy_result | default({})) is changed)
+     or ((linux_yum_repositories_result | default({})) is changed) }}
+
+# In check mode a repository added in the same run is not really written, so
+# apt/dnf cannot find its packages yet. True when that is the only error in
+# _linux_packages_result: apt stops at the first such package and only sets
+# `msg`, dnf lists every one of them in `failures`.
+_linux_packages_unavailable: >-
+  {{ _linux_packages_result.failures
+       | default([_linux_packages_result.msg | default('')], true)
+       | reject('search', '^No package.* available') | list | length == 0 }}

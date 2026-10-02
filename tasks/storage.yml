@@ -1,0 +1,158 @@
+---
+- name: Validate the storage definitions
+  ansible.builtin.assert:
+    that:
+      - linux_partitions | selectattr('device', 'undefined') | list | length == 0
+      - linux_partitions | selectattr('number', 'undefined') | list | length == 0
+      - linux_lvm_volumes | selectattr('vg', 'undefined') | list | length == 0
+      - linux_filesystems | selectattr('fstype', 'undefined') | list | length == 0
+      - linux_mounts | selectattr('path', 'undefined') | list | length == 0
+    fail_msg: >-
+      linux_partitions entries need 'device' and 'number', linux_lvm_volumes
+      need 'vg', linux_filesystems need 'fstype', linux_mounts need 'path'.
+    quiet: true
+
+- name: Ensure the partitioning and LVM tooling is installed
+  ansible.builtin.package:
+    name: "{{ linux_storage_packages }}"
+    state: present
+  when: linux_storage_install_packages | bool
+
+- name: Ensure the filesystem tooling is installed
+  ansible.builtin.package:
+    name: "{{ item.value }}"
+    state: present
+  loop: "{{ linux_filesystem_packages | dict2items }}"
+  loop_control:
+    label: "{{ item.value }}"
+  when:
+    - linux_storage_install_packages | bool
+    - item.key in (linux_filesystems | map(attribute='fstype') | list)
+
+- name: Check that the target block devices are present
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: "{{ linux_partitions | map(attribute='device') | unique | list }}"
+  register: linux_block_devices
+
+- name: Fail on a missing block device
+  ansible.builtin.assert:
+    that: linux_block_devices.results | rejectattr('stat.exists') | list | length == 0
+    fail_msg: >-
+      These block devices do not exist:
+      {{ linux_block_devices.results | rejectattr('stat.exists')
+         | map(attribute='item') | join(', ') }}.
+      Attach the disk to the VM before partitioning it.
+    quiet: true
+
+- name: Create the disk partitions
+  community.general.parted:
+    device: "{{ item.device }}"
+    number: "{{ item.number }}"
+    label: "{{ item.label | default('gpt') }}"
+    part_start: "{{ item.part_start | default('0%') }}"
+    part_end: "{{ item.part_end | default('100%') }}"
+    part_type: "{{ item.part_type | default(omit) }}"
+    name: "{{ item.name | default(omit) }}"
+    flags: "{{ item.flags | default(omit) }}"
+    unit: "{{ item.unit | default(omit) }}"
+    resize: "{{ item.resize | default(omit) }}"
+    state: "{{ item.state | default('present') }}"
+  loop: "{{ linux_partitions }}"
+  loop_control:
+    label: "{{ item.device }}p{{ item.number }}"
+
+# parted only tells the kernel to re-read the partition table; creating the
+# device nodes is udev's job and happens a moment later. Without this wait the
+# next task can fail with "Device /dev/sdb1 not found".
+- name: Settle udev after partitioning
+  ansible.builtin.command: udevadm settle
+  changed_when: false
+  failed_when: false
+  when: linux_partitions | length > 0
+
+- name: Wait for the partition devices to appear
+  ansible.builtin.wait_for:
+    path: "{{ item.device }}{{ 'p' if item.device is match('.*[0-9]$') else '' }}{{ item.number }}"
+    state: present
+    timeout: "{{ linux_partition_wait_timeout }}"
+  loop: "{{ linux_partitions }}"
+  loop_control:
+    label: "{{ item.device }}{{ 'p' if item.device is match('.*[0-9]$') else '' }}{{ item.number }}"
+  when: (item.state | default('present')) == 'present'
+
+- name: Ensure the LVM volume groups exist
+  community.general.lvg:
+    vg: "{{ item.vg | default(item.name) }}"
+    pvs: "{{ item.pvs | default(omit) }}"
+    pesize: "{{ item.pesize | default(omit) }}"
+    pv_options: "{{ item.pv_options | default(omit) }}"
+    vg_options: "{{ item.vg_options | default(omit) }}"
+    force: "{{ item.force | default(false) }}"
+    state: "{{ item.state | default('present') }}"
+  loop: "{{ linux_lvm_volume_groups }}"
+  loop_control:
+    label: "{{ item.vg | default(item.name) }}"
+
+- name: Ensure the LVM logical volumes exist
+  community.general.lvol:
+    vg: "{{ item.vg }}"
+    lv: "{{ item.lv | default(item.name) }}"
+    size: "{{ item.size | default(omit) }}"
+    pvs: "{{ item.pvs | default(omit) }}"
+    opts: "{{ item.opts | default(omit) }}"
+    thinpool: "{{ item.thinpool | default(omit) }}"
+    snapshot: "{{ item.snapshot | default(omit) }}"
+    resizefs: "{{ item.resizefs | default(false) }}"
+    shrink: "{{ item.shrink | default(false) }}"
+    force: "{{ item.force | default(false) }}"
+    active: "{{ item.active | default(omit) }}"
+    state: "{{ item.state | default('present') }}"
+  loop: "{{ linux_lvm_volumes }}"
+  loop_control:
+    label: "{{ item.vg }}/{{ item.lv | default(item.name) }}"
+
+- name: Create the filesystems
+  community.general.filesystem:
+    dev: "{{ item.device | default(item.dev) }}"
+    fstype: "{{ item.fstype }}"
+    opts: "{{ item.opts | default(omit) }}"
+    uuid: "{{ item.uuid | default(omit) }}"
+    resizefs: "{{ item.resizefs | default(false) }}"
+    # Guard rail: without force the module refuses to overwrite a filesystem
+    # that is already there but of a different type.
+    force: "{{ item.force | default(false) }}"
+    state: "{{ item.state | default('present') }}"
+  loop: "{{ linux_filesystems }}"
+  loop_control:
+    label: "{{ item.device | default(item.dev) }} ({{ item.fstype }})"
+
+- name: Configure the mounts and their fstab entries
+  ansible.posix.mount:
+    path: "{{ item.path }}"
+    src: "{{ item.src | default(omit) }}"
+    fstype: "{{ item.fstype | default(omit) }}"
+    opts: "{{ item.opts | default('defaults') }}"
+    dump: "{{ item.dump | default(omit) }}"
+    passno: "{{ item.passno | default(omit) }}"
+    backup: "{{ item.backup | default(true) }}"
+    state: "{{ item.state | default('mounted') }}"
+  loop: "{{ linux_mounts }}"
+  loop_control:
+    label: "{{ item.path }}"
+
+# Applied after mounting — permissions set before would land on the underlying
+# directory instead of the mounted filesystem.
+- name: Set the ownership of the mount points
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default(omit) }}"
+    group: "{{ item.group | default(omit) }}"
+    mode: "{{ item.mode | default(omit) }}"
+  loop: "{{ linux_mounts }}"
+  loop_control:
+    label: "{{ item.path }}"
+  when:
+    - item.state | default('mounted') in ['mounted', 'present']
+    - (item.owner is defined) or (item.group is defined) or (item.mode is defined)

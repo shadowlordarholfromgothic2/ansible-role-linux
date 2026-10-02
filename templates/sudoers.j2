@@ -1,0 +1,4 @@
+{{ ansible_managed | comment }}
+{% for rule in _linux_sudo_rules %}
+{{ item.name }} {{ rule }}
+{% endfor %}
