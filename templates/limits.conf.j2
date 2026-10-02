@@ -1,0 +1,8 @@
+{{ ansible_managed | comment }}
+# <domain>      <type>  <item>  <value>
+{% for limit in linux_limits %}
+{% if limit.comment is defined %}
+# {{ limit.comment }}
+{% endif %}
+{{ '%-15s'|format(limit.domain) }} {{ '%-7s'|format(limit.type | default('-')) }} {{ '%-15s'|format(limit.item) }} {{ limit.value }}
+{% endfor %}

@@ -1,0 +1,60 @@
+---
+# A package from a repository added earlier in this run cannot be found in
+# check mode, since the repository was never really written. That case is only
+# reported below; outside check mode, or without a repository change, a missing
+# package still fails the run.
+- name: Install the requested packages (apt)
+  ansible.builtin.apt:
+    name: "{{ linux_packages }}"
+    state: "{{ linux_packages_state }}"
+    update_cache: true
+    cache_valid_time: "{{ linux_apt_cache_valid_time }}"
+    install_recommends: "{{ linux_apt_install_recommends }}"
+  register: linux_packages_apt_result
+  failed_when:
+    - linux_packages_apt_result is failed
+    - not (ansible_check_mode and _linux_repositories_changed and _linux_packages_unavailable)
+  vars:
+    _linux_packages_result: "{{ linux_packages_apt_result }}"
+  when:
+    - linux_packages | length > 0
+    - ansible_facts.os_family == 'Debian'
+
+- name: Install the requested packages
+  ansible.builtin.package:
+    name: "{{ linux_packages }}"
+    state: "{{ linux_packages_state }}"
+  register: linux_packages_result
+  failed_when:
+    - linux_packages_result is failed
+    - not (ansible_check_mode and _linux_repositories_changed and _linux_packages_unavailable)
+  vars:
+    _linux_packages_result: "{{ linux_packages_result }}"
+  when:
+    - linux_packages | length > 0
+    - ansible_facts.os_family != 'Debian'
+
+- name: Report the packages check mode could not find
+  ansible.builtin.debug:
+    msg: >-
+      {{ _linux_packages_missing }} — expected in check mode while the
+      repository providing it is added in this same run. The requested
+      packages were not fully checked.
+  vars:
+    _linux_packages_missing: >-
+      {{ ([_linux_packages_result.msg | default('')]
+          + (_linux_packages_result.failures | default([])))
+         | select('search', '^No package.* available') | join(' ') }}
+    _linux_packages_result: >-
+      {{ linux_packages_apt_result if linux_packages_apt_result is not skipped
+         else linux_packages_result }}
+  when:
+    - ansible_check_mode
+    - _linux_packages_result is not skipped
+    - _linux_packages_unavailable
+
+- name: Remove the unwanted packages
+  ansible.builtin.package:
+    name: "{{ linux_packages_absent }}"
+    state: absent
+  when: linux_packages_absent | length > 0

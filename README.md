@@ -1,134 +1,241 @@
-# `template_role` role
+# `linux` role
 
-> **Using this template** — delete this block once the new role is set up.
->
-> 1. Copy the directory (without `.git/` and `.ansible/`) and rename the role
->    everywhere. The name must match `^[a-z][a-z0-9_]*$`:
->
->    ```bash
->    grep -rlE 'template[_-]role' --exclude-dir=.git --exclude-dir=.ansible . \
->      | xargs sed -i -e 's/template_role/my_role/g' -e 's/template-role/my-role/g'
->    ```
->
-> 2. Fill in `meta/main.yml` (description, platforms, tags) and
->    `requirements.yml` (the collections the role uses).
-> 3. Replace the example config-file logic in `defaults/`, `tasks/`,
->    `templates/`, `handlers/` and `molecule/default/` with the real role.
->    Everything marked `TODO` needs attention.
-> 4. Fill in the sections of this README.
-> 5. On GitHub: use squash merges with the PR title as the commit message, and
->    optionally add a `RELEASE_PLEASE_TOKEN` secret (see [Releases](#releases)).
->
-> Before the first push, run the same checks as CI (see [Testing](#testing)).
+Basic setup of Linux VMs: users, SSH server settings, timezone, packages (incl. extra repositories),
+package upgrades, disk partitions / LVM / filesystems / mounts, sysctl settings
+and ulimits.
 
-TODO: one paragraph on what the role does — and what it deliberately leaves
-to other roles.
+Everything is opt-in — with the defaults the role changes nothing, so you can
+enable one feature at a time per host or group.
 
 ## Requirements
 
-* ansible-core ≥ 2.14
-* TODO: collections (also listed in [`requirements.yml`](requirements.yml)).
-* TODO: what must already be on the target host. If the role checks for it
-  rather than installing it, say so.
-* `become: true` — TODO: say why.
-
-## What the role does
-
-1. **Validates input** — TODO: the checks and what they guard against.
-2. TODO: one numbered step per section of [`tasks/main.yml`](tasks/main.yml).
-
-On the managed host it leaves:
-
-```text
-/etc/template_role/
-└── config.ini              # TODO: the files and directories the role manages
-```
-
-## Variables
-
-See [`defaults/main.yml`](defaults/main.yml) for the full commented list.
-
-| Variable                   | Default              | Purpose |
-|----------------------------|----------------------|---------|
-| `template_role_state`      | `present`            | `present` / `absent` |
-| `template_role_config_dir` | `/etc/template_role` | Configuration directory on the host |
-| `template_role_settings`   | `{}`                 | Key/value pairs written to `config.ini` |
-
-TODO: list here any variables the role registers for later tasks.
+* ansible-core ≥ 2.15 (tested on 2.21)
+* Collections: `community.general`, `ansible.posix` — `ansible-galaxy install -r requirements.yml`
+* Debian/Ubuntu or RedHat-family targets; the role asserts this up front.
+  Repository management is implemented per family (deb822/one-line vs. yum).
+* `become: true` — the role configures system state throughout.
 
 ## Usage
 
 ```yaml
-# group_vars/all.yml
-template_role_settings:
-  log_level: info
-```
-
-```yaml
-- hosts: all
+- hosts: linux
   become: true
   roles:
-    - role: template_role
+    - role: linux
 ```
 
-### Removing
+Tags: `timezone`, `repositories`, `upgrade`, `packages`, `users`, `ssh`, `storage`,
+`sysctl`, `limits` — plus `linux` for all of them.
 
 ```bash
-ansible-playbook playbook.yml -e template_role_state=absent
+ansible-playbook linux.yml --tags users,packages
 ```
 
-TODO: say what is removed and what is kept.
+## Users
 
-## Tags
+```yaml
+linux_groups:
+  - {name: deploy, gid: 1500}
 
-| Tag      | Tasks |
-|----------|-------|
-| `always` | Input validation |
-| `config` | TODO |
+linux_users:
+  - name: deploy
+    comment: Deployment user
+    groups: [deploy, docker]        # supplementary; `group:` sets the primary one
+    shell: /bin/bash
+    ssh_keys:
+      - "ssh-ed25519 AAAA... kirgo@laptop"
+    ssh_keys_exclusive: true        # prune keys that are not listed here
+    sudo: true
+    sudo_nopasswd: true
 
-## Notes
+  - name: appsvc                    # service account, no login, no sudo
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
 
-* TODO: design decisions and pitfalls a user should know about — anything
-  that would surprise someone reading the tasks for the first time.
-
-## Testing
-
-A Molecule scenario runs the role in a Debian 13 container, then checks
-idempotence and TODO: what [`verify.yml`](molecule/default/verify.yml)
-asserts. CI runs it, together with both linters, on every pull request:
-
-```bash
-pip install -r requirements-dev.txt     # same pinned versions as CI
-yamllint --strict .
-ansible-lint
-molecule test
+  - name: olduser
+    state: absent
+    remove: true                    # also delete the home directory
 ```
 
-ansible-lint and Molecule install the collections and test roles from
-[`requirements.yml`](requirements.yml) on their own.
+`sudo: true` writes `/etc/sudoers.d/60-ansible-<user>`, validated with `visudo -c`
+before it is installed. Set `sudo_rules` to replace the default
+`ALL=(ALL:ALL) NOPASSWD:ALL` with your own lines (it still needs `sudo: true`).
+Turning `sudo` off again removes the drop-in.
 
-## Releases
+### Passwords
 
-PRs are squash-merged, so the PR title becomes the commit on `main`. It must be
-a [Conventional Commit](https://www.conventionalcommits.org/) (a check enforces
-this), because it decides the next version and the changelog entry:
+Passwords are optional and live in their own variable so that `linux_users` can
+stay in readable group_vars while the secrets are vaulted:
 
-| PR title                                              | Next release | Changelog       |
-|-------------------------------------------------------|--------------|-----------------|
-| `feat!: …` or a `BREAKING CHANGE:` footer             | major        | ⚠ Breaking      |
-| `feat: …`                                             | minor        | Features        |
-| `fix:` / `perf:` / `revert:` / `docs: …`              | patch        | own section     |
-| `ci:` / `test:` / `refactor:` / `build:` / `style:` / `chore: …` | none | not listed |
+```yaml
+# group_vars/linux/vault.yml  — ansible-vault encrypt this file
+linux_user_passwords:
+  deploy: "the-plaintext-password"
+  backup: "$6$rounds=656000$somesalt$somehash..."   # already a crypt(3) hash
+```
 
-After each merge, [release-please](https://github.com/googleapis/release-please)
-opens or updates a release PR with the version bump and the new `CHANGELOG.md`
-entry. Merging that PR tags the release (e.g. `1.2.0`) and publishes a GitHub
-release.
+Values that already look like a crypt hash are used as they are; anything else
+is hashed on the controller with `linux_user_password_algorithm` (`sha512`).
+Plaintext is hashed with a salt derived from the user name and
+`linux_user_password_salt`, so the resulting hash is stable — otherwise
+`/etc/shadow` would be rewritten on every run. **Override
+`linux_user_password_salt` per environment**, and treat it as part of the secret.
 
-PRs opened with the default `GITHUB_TOKEN` do not trigger workflows, so the
-release PR gets no CI checks. If branch protection requires them, add a
-fine-grained PAT as the `RELEASE_PLEASE_TOKEN` secret.
+Users without an entry are left alone. `linux_user_update_password` (`always` by
+default) decides whether an existing password is overwritten or only set at
+creation time (`on_create`). The user task runs with `no_log` — set
+`linux_users_no_log: false` when you need to debug it.
 
-## License
+## SSH server
 
-MIT
+```yaml
+linux_sshd_configure: true
+
+# defaults
+linux_sshd_pubkey_authentication: true              # PubkeyAuthentication
+linux_sshd_password_authentication: false           # PasswordAuthentication
+linux_sshd_kbd_interactive_authentication: false    # KbdInteractiveAuthentication
+linux_sshd_permit_root_login: false                 # PermitRootLogin
+linux_sshd_max_auth_tries: 3                        # MaxAuthTries
+```
+
+Booleans are written as `yes`/`no`; `linux_sshd_permit_root_login` also takes
+`prohibit-password` or `forced-commands-only`.
+
+The settings go to `/etc/ssh/sshd_config.d/00-ansible.conf`. sshd keeps the
+first value it reads for a keyword, and Debian, Ubuntu and EL9 include that
+directory at the top of `sshd_config`, so the `00-` prefix wins over drop-ins
+like Ubuntu's `50-cloud-init.conf` (which may turn password logins back on).
+The file is checked with `sshd -t` before it is installed, sshd is reloaded
+afterwards, and the role then reads `sshd -T` to confirm every setting is in
+effect — it fails if something earlier in the config overrides them.
+
+`openssh-server` is installed if it is missing. With the defaults, password and
+root logins stop working: make sure the account Ansible connects as has a key
+(see `ssh_keys` under [Users](#users), which runs first) before enabling this.
+
+## Timezone
+
+```yaml
+linux_timezone: Europe/Berlin
+linux_hwclock: UTC            # optional
+```
+
+Cron is restarted afterwards because it only reads `/etc/localtime` at start-up.
+On systemd hosts `timedatectl` does not touch Debian's `/etc/timezone`, so the
+role keeps that file in sync itself.
+
+## Packages and repositories
+
+```yaml
+linux_apt_keys:
+  - {name: docker, url: "https://download.docker.com/linux/debian/gpg"}
+
+linux_apt_repositories:            # ansible.builtin.deb822_repository
+  - name: docker
+    uris: https://download.docker.com/linux/debian
+    suites: ["{{ ansible_facts.distribution_release }}"]
+    components: [stable]
+    signed_by: /etc/apt/keyrings/docker.asc
+
+linux_packages: [htop, curl, containerd.io]
+linux_packages_absent: [telnet]
+linux_apt_install_recommends: false
+```
+
+Keys are fetched into `/etc/apt/keyrings/<name>.asc`; for a binary (dearmored)
+key set `dest:` with a `.gpg` suffix. The apt cache is refreshed immediately
+after a repository change, so packages from the new repo can be installed in the
+same run. `python3-debian`, which `deb822_repository` needs, is installed
+automatically.
+
+In check mode a new repository is never really written, so its packages cannot
+be found yet. When a repository changed in the same run, "No package … available"
+is therefore only reported, not treated as a failure; otherwise it still fails.
+
+For repos that are easier to write as a single line use
+`linux_apt_repositories_legacy` (`filename` + `repo`); the role writes the
+`.list` file directly, since `apt_repository` is deprecated as of core 2.21.
+RedHat targets use `linux_yum_repositories`.
+
+## Upgrades
+
+```yaml
+linux_upgrade: true
+linux_upgrade_type: safe        # apt: safe | full | dist | yes
+linux_reboot_if_required: false # reboot when the system asks for one
+```
+
+## Storage
+
+Order of operations: partitions → volume groups → logical volumes →
+filesystems → mounts.
+
+```yaml
+linux_partitions:
+  - {device: /dev/sdb, number: 1, label: gpt, part_end: 100%, flags: [lvm]}
+
+linux_lvm_volume_groups:
+  - {name: vg_data, pvs: [/dev/sdb1]}
+
+linux_lvm_volumes:
+  - {name: lv_docker, vg: vg_data, size: 50G}
+
+linux_filesystems:
+  - {device: /dev/vg_data/lv_docker, fstype: ext4}
+
+linux_mounts:
+  - path: /var/lib/docker
+    src: /dev/vg_data/lv_docker
+    fstype: ext4
+    opts: defaults,noatime
+    owner: root
+    mode: "0711"
+```
+
+Notes:
+
+* The role fails with a clear message if a device in `linux_partitions` does not
+  exist, rather than partitioning something unintended.
+* After partitioning it waits for the new device nodes (`udevadm settle` +
+  `wait_for`), which otherwise race with the next task.
+* Creating a filesystem where a *different* one already exists needs an explicit
+  `force: true` per entry. That reformats the device — check twice.
+* Mount point ownership is applied after mounting, so it lands on the mounted
+  filesystem and not on the directory underneath.
+* `linux_mounts` entries with `state: present` only write the fstab line.
+
+## sysctl
+
+```yaml
+linux_sysctl:
+  net.ipv4.ip_forward: 1
+  vm.swappiness: 10
+linux_sysctl_absent: [net.ipv4.tcp_syncookies]
+```
+
+Written to `/etc/sysctl.d/99-ansible.conf` and applied at runtime.
+
+## ulimits
+
+```yaml
+linux_limits:
+  - {domain: "*", type: soft, item: nofile, value: 65535, comment: raise the fd limit}
+  - {domain: "@deploy", type: hard, item: nproc, value: 4096}
+```
+
+Rendered as a single managed file (`/etc/security/limits.d/99-ansible.conf`), so
+removing an entry from the list also removes it from the host.
+
+`limits.conf` is enforced by `pam_limits`, i.e. for login sessions only. Daemons
+started by systemd get their limits from systemd, so set those separately:
+
+```yaml
+linux_systemd_limits:
+  DefaultLimitNOFILE: "65535:65535"
+```
+
+This writes drop-ins for `system.conf` and `user.conf` and runs
+`systemctl daemon-reexec`. Already running services keep their old limits until
+they are restarted.

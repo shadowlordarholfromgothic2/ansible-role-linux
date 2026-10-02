@@ -1,0 +1,17 @@
+---
+- name: Set the system timezone
+  community.general.timezone:
+    name: "{{ linux_timezone }}"
+    hwclock: "{{ linux_hwclock | default(omit, true) }}"
+  notify: Restart cron
+
+# On a systemd host the module only calls timedatectl, which does not know about
+# Debian's /etc/timezone — it would keep reporting the previous zone.
+- name: Keep /etc/timezone in sync
+  ansible.builtin.copy:
+    content: "{{ linux_timezone }}\n"
+    dest: /etc/timezone
+    owner: root
+    group: root
+    mode: "0644"
+  when: ansible_facts.os_family == 'Debian'

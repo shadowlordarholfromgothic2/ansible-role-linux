@@ -1,18 +1,46 @@
 ---
-# Runs the role in a throwaway container and proves it converges, is
-# idempotent and leaves the host in the expected state.
+# Runs the role in throwaway containers, one per supported family, with every
+# feature switched on that can be exercised in a container, and proves it
+# converges, is idempotent and leaves the hosts in the expected state.
 #
 #   pip install -r requirements-dev.txt
 #   molecule test
+#
+# On an Ubuntu 24.04 host, sudo fails in the Rocky Linux instance until the
+# host's AppArmor lets unix_chkpwd read /etc/shadow: see the Molecule job in
+# .github/workflows/ci.yml.
+#
+# Not covered: partitions and LVM (they need block devices, and a container
+# only sees the host's), the hardware clock and reboots.
 
 driver:
   name: docker
 
 platforms:
-  # Images with systemd as PID 1, so roles that manage services can be tested.
-  - name: template-role-debian13
+  # Images with systemd as PID 1, so the services the role restarts or reloads
+  # (cron, sshd, systemd itself) behave as they do on a VM. Privileged for that
+  # and for the tmpfs mount and sysctl settings.
+  - name: linux-debian13
     image: geerlingguy/docker-debian13-ansible:latest
     command: /lib/systemd/systemd
+    pre_build_image: true
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+
+  - name: linux-ubuntu2404
+    image: geerlingguy/docker-ubuntu2404-ansible:latest
+    command: /lib/systemd/systemd
+    pre_build_image: true
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+
+  - name: linux-rockylinux9
+    image: geerlingguy/docker-rockylinux9-ansible:latest
+    command: /usr/sbin/init
     pre_build_image: true
     privileged: true
     cgroupns_mode: host
@@ -32,6 +60,7 @@ scenario:
   test_sequence:
     - destroy
     - create
+    - prepare
     - converge
     - idempotence     # the important one
     - verify

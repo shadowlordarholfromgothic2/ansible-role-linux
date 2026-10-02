@@ -1,0 +1,114 @@
+---
+- name: Validate the user definitions
+  ansible.builtin.assert:
+    that:
+      - item.name is defined
+      - item.name | string | length > 0
+    fail_msg: "every entry in linux_users needs a 'name': {{ item }}"
+    quiet: true
+  loop: "{{ linux_users }}"
+  loop_control:
+    label: "{{ item.name | default(item) }}"
+
+- name: Ensure the declared groups exist
+  ansible.builtin.group:
+    name: "{{ item.name }}"
+    gid: "{{ item.gid | default(omit) }}"
+    system: "{{ item.system | default(omit) }}"
+    state: "{{ item.state | default('present') }}"
+  loop: "{{ linux_groups }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Ensure the declared users exist
+  ansible.builtin.user:
+    name: "{{ item.name }}"
+    comment: "{{ item.comment | default(omit) }}"
+    uid: "{{ item.uid | default(omit) }}"
+    group: "{{ item.group | default(omit) }}"
+    groups: "{{ item.groups | default(omit) }}"
+    # `append` is only valid together with `groups`.
+    append: "{{ (item.append | default(true)) if item.groups is defined else omit }}"
+    shell: "{{ item.shell | default(linux_user_shell) }}"
+    home: "{{ item.home | default(omit) }}"
+    create_home: "{{ item.create_home | default(true) }}"
+    system: "{{ item.system | default(false) }}"
+    expires: "{{ item.expires | default(omit) }}"
+    password_lock: "{{ item.password_lock | default(omit) }}"
+    password: "{{ _linux_password if _linux_password_raw | length > 0 else omit }}"
+    update_password: "{{ item.update_password | default(linux_user_update_password) }}"
+    state: present
+  loop: "{{ _linux_users_present }}"
+  loop_control:
+    label: "{{ item.name }}"
+  vars:
+    # An inline `password:` wins over the (vault-encrypted) password map.
+    _linux_password_raw: "{{ item.password | default(linux_user_passwords[item.name] | default('')) }}"
+    # Values that already look like a crypt(3) hash are passed through, the rest
+    # is hashed here. The salt is derived from the user name so that the
+    # resulting hash — and /etc/shadow — stays stable across runs.
+    _linux_password: >-
+      {{ _linux_password_raw
+         if _linux_password_raw is match('\$[0-9a-zA-Z]+\$')
+         else _linux_password_raw | password_hash(
+                linux_user_password_algorithm,
+                ((item.name ~ linux_user_password_salt) | hash('sha512'))[0:16]) }}
+  no_log: "{{ linux_users_no_log | bool }}"
+
+- name: Manage the authorized SSH keys
+  ansible.posix.authorized_key:
+    user: "{{ item.name }}"
+    key: "{{ ([item.ssh_keys] if item.ssh_keys is string else item.ssh_keys) | join('\n') }}"
+    exclusive: "{{ item.ssh_keys_exclusive | default(false) }}"
+    manage_dir: true
+    state: present
+  loop: "{{ _linux_users_ssh_keys }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Ensure sudo is installed
+  ansible.builtin.package:
+    name: "{{ linux_sudo_package }}"
+    state: present
+  when: _linux_users_sudo | length > 0
+
+- name: Grant sudo privileges
+  ansible.builtin.template:
+    src: sudoers.j2
+    dest: "{{ _linux_sudoers_file }}"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: "{{ linux_visudo_path }} -csf %s"
+  loop: "{{ _linux_users_sudo }}"
+  loop_control:
+    label: "{{ item.name }}"
+  vars:
+    # sudo ignores drop-ins whose name contains a dot or ends in ~.
+    _linux_sudoers_file: >-
+      {{ '/etc/sudoers.d/' ~ linux_sudoers_file_prefix
+         ~ (item.name | regex_replace('[^A-Za-z0-9_-]', '-')) }}
+    _linux_sudo_rules: >-
+      {{ item.sudo_rules | default(['ALL=(ALL:ALL) '
+         ~ ('NOPASSWD:ALL' if (item.sudo_nopasswd | default(linux_sudo_nopasswd)) | bool
+            else 'ALL')]) }}
+
+- name: Revoke sudo privileges
+  ansible.builtin.file:
+    path: >-
+      {{ '/etc/sudoers.d/' ~ linux_sudoers_file_prefix
+         ~ (item.name | regex_replace('[^A-Za-z0-9_-]', '-')) }}
+    state: absent
+  loop: "{{ _linux_users_nosudo }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Remove the users marked absent
+  ansible.builtin.user:
+    name: "{{ item.name }}"
+    state: absent
+    remove: "{{ item.remove | default(false) }}"
+    force: "{{ item.force | default(omit) }}"
+  loop: "{{ _linux_users_absent }}"
+  loop_control:
+    label: "{{ item.name }}"

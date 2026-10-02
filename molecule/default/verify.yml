@@ -1,22 +1,296 @@
 ---
 # Check the host's end state, not the role's output: what would a user log in
-# and look at to tell that the role worked?
+# and look at to tell that the role worked? The values mirror converge.yml.
+# The upgrade has no check here: anything it left behind would show up as a
+# change in the idempotence step.
 - name: Verify
   hosts: all
   become: true
-  gather_facts: false
 
   tasks:
-    - name: Read the rendered configuration file
-      ansible.builtin.slurp:
-        src: /etc/template_role/config.ini
-      register: config
+    # ── Timezone ────────────────────────────────────────────────────────────
+    - name: Read the timezone abbreviation in use
+      ansible.builtin.command: date +%Z
+      register: verify_tz
+      changed_when: false
 
-    - name: Assert the settings were rendered
+    - name: Read /etc/timezone
+      ansible.builtin.slurp:
+        src: /etc/timezone
+      register: verify_etc_timezone
+      when: ansible_facts.os_family == 'Debian'
+
+    - name: Assert the timezone is Europe/Berlin
       ansible.builtin.assert:
         that:
-          - "'log_level = info' in content"
-          - "'listen = 127.0.0.1:8080' in content"
+          - verify_tz.stdout in ['CET', 'CEST']
+          - verify_etc_timezone is skipped or (verify_etc_timezone.content | b64decode) == "Europe/Berlin\n"
+        quiet: true
+
+    # ── Packages and repositories ───────────────────────────────────────────
+    - name: Gather the installed packages
+      ansible.builtin.package_facts:
+
+    - name: Assert the requested packages are installed and the unwanted ones removed
+      ansible.builtin.assert:
+        that:
+          - "'jq' in ansible_facts.packages"
+          - "('cron' if ansible_facts.os_family == 'Debian' else 'cronie') in ansible_facts.packages"
+          - "'parted' in ansible_facts.packages"
+          - "'tree' not in ansible_facts.packages"
+        quiet: true
+
+    # The probes exist in nothing but these sources, so being installed proves
+    # that the key, the source and the cache refresh all worked.
+    - name: Assert the packages from both apt sources are installed
+      ansible.builtin.assert:
+        that:
+          - "'molecule-deb822-probe' in ansible_facts.packages"
+          - "'molecule-legacy-probe' in ansible_facts.packages"
+        quiet: true
+      when: ansible_facts.os_family == 'Debian'
+
+    - name: Look for the one-line source marked absent
+      ansible.builtin.stat:
+        path: /etc/apt/sources.list.d/molecule-stale.list
+      register: verify_stale_source
+      when: ansible_facts.os_family == 'Debian'
+
+    - name: Assert the one-line source marked absent is gone
+      ansible.builtin.assert:
+        that: not verify_stale_source.stat.exists
+        quiet: true
+      when: ansible_facts.os_family == 'Debian'
+
+    - name: List the enabled yum repositories
+      ansible.builtin.command: dnf -q repolist --enabled
+      register: verify_repolist
+      changed_when: false
+      when: ansible_facts.os_family == 'RedHat'
+
+    - name: Assert the yum repository is enabled
+      ansible.builtin.assert:
+        that: verify_repolist.stdout is search('^molecule\s', multiline=true)
+        quiet: true
+      when: ansible_facts.os_family == 'RedHat'
+
+    # ── Users and groups ────────────────────────────────────────────────────
+    - name: Look up the accounts
+      ansible.builtin.getent:
+        database: "{{ item }}"
+      loop: [passwd, group, shadow]
+
+    - name: Look for the home directories that must not exist
+      ansible.builtin.stat:
+        path: "/home/{{ item }}"
+      loop: [svc, olduser]
+      register: verify_homes
+
+    - name: Assert the accounts are as declared
+      ansible.builtin.assert:
+        that:
+          - getent_group.molecule[1] == '2500'
+          - "'deploy' in getent_group.molecule[2].split(',')"
+          # Existing user: its shell was changed to linux_user_shell.
+          - getent_passwd.deploy[5] == '/bin/bash'
+          # The plaintext was hashed, with sha512 ...
+          - getent_shadow.deploy[0] is match('\$6\$')
+          # ... while a crypt(3) hash is taken as it is.
+          - getent_shadow['ops.admin'][0] == '$6$mol3cule$Y2DYiy4JamopYY655npi3rvd/H93TURRCkKFSwnLkQoDqiI88rZj/uiGFxU2rD3XNpR.3MoXN57e2msKES0PE.'
+          - getent_passwd['ops.admin'][3] == 'Operator'
+          - getent_passwd.svc[1] | int < 1000
+          - getent_passwd.svc[5] == '/usr/sbin/nologin'
+          - "'olduser' not in getent_passwd"
+          - verify_homes.results | selectattr('stat.exists') | list | length == 0
+        quiet: true
+
+    - name: Read the authorized keys
+      ansible.builtin.slurp:
+        src: "/home/{{ item }}/.ssh/authorized_keys"
+      loop: [deploy, ops.admin]
+      register: verify_authorized_keys
+
+    - name: Assert only the declared keys are authorized
+      ansible.builtin.assert:
+        that:
+          - "'deploy-laptop@molecule' in _keys.deploy"
+          - "'deploy-ci@molecule' in _keys.deploy"
+          - "'stale@molecule' not in _keys.deploy"     # ssh_keys_exclusive
+          - "'ops-admin@molecule' in _keys['ops.admin']"
         quiet: true
       vars:
-        content: "{{ config.content | b64decode }}"
+        _keys: >-
+          {{ dict(verify_authorized_keys.results | map(attribute='item')
+                  | zip(verify_authorized_keys.results | map(attribute='content') | map('b64decode'))) }}
+
+    # ── sudo ────────────────────────────────────────────────────────────────
+    - name: Look for the sudoers drop-ins
+      ansible.builtin.stat:
+        path: "/etc/sudoers.d/{{ item }}"
+      loop: [60-ansible-deploy, 60-ansible-ops-admin, 60-ansible-olduser]
+      register: verify_sudoers
+
+    - name: Assert the drop-ins are there, with a dot-free name, and the revoked one is gone
+      ansible.builtin.assert:
+        that:
+          - _sudoers['60-ansible-deploy'].mode == '0440'
+          - _sudoers['60-ansible-ops-admin'].mode == '0440'
+          - not _sudoers['60-ansible-olduser'].exists
+        quiet: true
+      vars:
+        _sudoers: "{{ verify_sudoers.results | items2dict(key_name='item', value_name='stat') }}"
+
+    - name: Check that deploy can use sudo without a password
+      ansible.builtin.command: runuser -u deploy -- sudo -n true
+      changed_when: false
+
+    - name: Run the command the custom rule of ops.admin allows
+      ansible.builtin.command: runuser -u ops.admin -- sudo -n /usr/bin/id -u
+      register: verify_sudo_allowed
+      changed_when: false
+
+    - name: Run a command the custom rule of ops.admin does not allow
+      ansible.builtin.command: runuser -u ops.admin -- sudo -n /usr/bin/true
+      register: verify_sudo_denied
+      changed_when: false
+      failed_when: verify_sudo_denied.rc == 0
+
+    - name: Assert the custom rule replaced the default one
+      ansible.builtin.assert:
+        that: verify_sudo_allowed.stdout == '0'
+        quiet: true
+
+    # ── SSH server ──────────────────────────────────────────────────────────
+    - name: Read the effective sshd configuration
+      ansible.builtin.command: sshd -T
+      register: verify_sshd
+      changed_when: false
+
+    - name: Gather the service states
+      ansible.builtin.service_facts:
+
+    - name: Assert sshd uses the settings and still runs after the reload
+      ansible.builtin.assert:
+        that:
+          - "'pubkeyauthentication yes' in verify_sshd.stdout_lines"
+          - "'passwordauthentication no' in verify_sshd.stdout_lines"
+          - "'kbdinteractiveauthentication no' in verify_sshd.stdout_lines"
+          - "'permitrootlogin without-password' in verify_sshd.stdout_lines"
+          - "'maxauthtries 4' in verify_sshd.stdout_lines"
+          - ansible_facts.services[_sshd ~ '.service'].state == 'running'
+        quiet: true
+      vars:
+        _sshd: "{{ 'ssh' if ansible_facts.os_family == 'Debian' else 'sshd' }}"
+
+    # ── Storage ─────────────────────────────────────────────────────────────
+    - name: Read the filesystem type of the disk image
+      ansible.builtin.command: blkid -o value -s TYPE /srv/molecule-disk.img
+      register: verify_fstype
+      changed_when: false
+
+    - name: Read the mounts
+      ansible.builtin.command: "findmnt --noheadings --output FSTYPE,OPTIONS {{ item }}"
+      loop: [/mnt/molecule, /mnt/molecule-later]
+      register: verify_mounts
+      changed_when: false
+      failed_when: false
+
+    - name: Look at the mount point
+      ansible.builtin.stat:
+        path: /mnt/molecule
+      register: verify_mountpoint
+
+    - name: Read /etc/fstab
+      ansible.builtin.slurp:
+        src: /etc/fstab
+      register: verify_fstab
+
+    - name: Assert the filesystem, mounts and fstab entries are in place
+      ansible.builtin.assert:
+        that:
+          - verify_fstype.stdout == 'ext4'
+          - _mount[0] == 'tmpfs'
+          - "'noexec' in _mount[1].split(',')"
+          - verify_mounts.results[1].rc != 0       # state: present, fstab only
+          # Applied after mounting, i.e. to the tmpfs and not the directory under it.
+          - verify_mountpoint.stat.pw_name == 'deploy'
+          - verify_mountpoint.stat.gr_name == 'molecule'
+          - verify_mountpoint.stat.mode == '0750'
+          - _fstab is search('^tmpfs\s+/mnt/molecule\s+tmpfs\s+size=16m,noexec\s', multiline=true)
+          - _fstab is search('^tmpfs\s+/mnt/molecule-later\s+tmpfs\s', multiline=true)
+        quiet: true
+      vars:
+        _mount: "{{ verify_mounts.results[0].stdout.split() }}"      # FSTYPE, OPTIONS
+        _fstab: "{{ verify_fstab.content | b64decode }}"
+
+    # The guard in front of community.general.parted: a typo in a device name
+    # must stop the run instead of partitioning something else.
+    - name: Partition a disk that does not exist
+      block:
+        - name: Run the role against a missing disk
+          ansible.builtin.include_role:
+            name: homelab.linux
+          vars:
+            linux_partitions:
+              - {device: /dev/molecule-missing, number: 1}
+            linux_storage_install_packages: false
+
+        - name: Fail, the role went on
+          ansible.builtin.fail:
+            msg: The role did not stop at a block device that does not exist.
+      rescue:
+        - name: Assert the role stopped at the block device check
+          ansible.builtin.assert:
+            that: "'/dev/molecule-missing' in ansible_failed_result.msg"
+            quiet: true
+
+    # ── sysctl ──────────────────────────────────────────────────────────────
+    - name: Read the runtime sysctl values
+      ansible.builtin.command: sysctl -n net.ipv4.ip_forward net.core.somaxconn
+      register: verify_sysctl
+      changed_when: false
+
+    - name: Read the sysctl file
+      ansible.builtin.slurp:
+        src: /etc/sysctl.d/99-ansible.conf
+      register: verify_sysctl_file
+
+    - name: Assert the settings are applied and persisted, the dropped one removed
+      ansible.builtin.assert:
+        that:
+          - verify_sysctl.stdout_lines == ['1', '4096']
+          - "'net.ipv4.ip_forward=1' in _content"
+          - "'net.core.somaxconn=4096' in _content"
+          - "'tcp_fin_timeout' not in _content"
+        quiet: true
+      vars:
+        _content: "{{ verify_sysctl_file.content | b64decode }}"
+
+    # ── ulimits ─────────────────────────────────────────────────────────────
+    - name: Read the PAM limits file
+      ansible.builtin.slurp:
+        src: /etc/security/limits.d/99-ansible.conf
+      register: verify_limits
+
+    - name: Look for the systemd user manager drop-in
+      ansible.builtin.stat:
+        path: /etc/systemd/user.conf.d/99-ansible-limits.conf
+      register: verify_user_limits
+
+    # Only shows the new values if the handler re-executed systemd.
+    - name: Read the default limits of the systemd manager # noqa: command-instead-of-module
+      ansible.builtin.command: systemctl show --property DefaultLimitNOFILE --property DefaultLimitNOFILESoft
+      register: verify_systemd_limits
+      changed_when: false
+
+    - name: Assert the limits are configured
+      ansible.builtin.assert:
+        that:
+          - _content is search('^\*\s+soft\s+nofile\s+65535$', multiline=true)
+          - _content is search('^@molecule\s+hard\s+nproc\s+4096$', multiline=true)
+          - verify_user_limits.stat.exists
+          - "'DefaultLimitNOFILE=65536' in verify_systemd_limits.stdout_lines"
+          - "'DefaultLimitNOFILESoft=32768' in verify_systemd_limits.stdout_lines"
+        quiet: true
+      vars:
+        _content: "{{ verify_limits.content | b64decode }}"

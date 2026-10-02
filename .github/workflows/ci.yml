@@ -75,4 +75,16 @@ jobs:
 
       - run: pip install -r requirements-dev.txt
 
+      # The host's AppArmor profile for unix_chkpwd also confines it inside
+      # privileged containers, and the one in Ubuntu 24.04 lacks the capability
+      # to read an /etc/shadow with mode 0000, which is how EL ships it. pam_unix
+      # needs the helper there, so every sudo in the Rocky Linux instance fails
+      # ("PAM account management error"). Newer AppArmor releases grant it.
+      - name: Let unix_chkpwd read the EL shadow file
+        run: |
+          if [ -f /etc/apparmor.d/unix-chkpwd ]; then
+            echo 'capability dac_read_search,' | sudo tee -a /etc/apparmor.d/local/unix-chkpwd
+            sudo apparmor_parser -r /etc/apparmor.d/unix-chkpwd
+          fi
+
       - run: molecule test

@@ -1,55 +1,89 @@
 ---
-# ==============================================================================
-# 1. FAIL FAST - validate input before touching anything
-# ==============================================================================
+- name: Gather facts when the play did not
+  ansible.builtin.setup:
+  when: ansible_facts.os_family is not defined
+  tags: [always]
 
-- name: Validate role input
+- name: Assert that the target platform is supported
   ansible.builtin.assert:
-    that:
-      - template_role_state in ['present', 'absent']
-      - template_role_config_dir is match('^/')
-      - template_role_settings is mapping
+    that: ansible_facts.os_family in ['Debian', 'RedHat']
     fail_msg: >-
-      template_role: needs template_role_state present/absent, an absolute
-      template_role_config_dir and a dict in template_role_settings
-      (got state='{{ template_role_state }}',
-      config_dir='{{ template_role_config_dir }}')
+      The linux role supports Debian- and RedHat-family hosts,
+      this one reports os_family '{{ ansible_facts.os_family }}'.
     quiet: true
   tags: [always]
 
-# ==============================================================================
-# 2. TEARDOWN - a separate path, so the rest of the file only handles 'present'
-# ==============================================================================
+- name: Configure the timezone
+  ansible.builtin.include_tasks:
+    file: timezone.yml
+    apply:
+      tags: [linux, timezone]
+  when: linux_timezone | length > 0
+  tags: [linux, timezone]
 
-- name: Remove the configuration
-  ansible.builtin.file:
-    path: "{{ template_role_config_dir }}"
-    state: absent
-  when: template_role_state == 'absent'
-  tags: [config]
+- name: Configure additional package repositories
+  ansible.builtin.include_tasks:
+    file: repositories.yml
+    apply:
+      tags: [linux, repositories]
+  when: (linux_apt_keys | length > 0) or (linux_apt_repositories | length > 0) or
+        (linux_apt_repositories_legacy | length > 0) or (linux_yum_repositories | length > 0)
+  tags: [linux, repositories]
 
-# ==============================================================================
-# 3. CONFIGURE
-# ==============================================================================
+- name: Upgrade the installed packages
+  ansible.builtin.include_tasks:
+    file: upgrade.yml
+    apply:
+      tags: [linux, upgrade]
+  when: linux_upgrade | bool
+  tags: [linux, upgrade]
 
-- name: Configure template_role
-  when: template_role_state == 'present'
-  tags: [config]
-  block:
-    - name: Create the configuration directory
-      ansible.builtin.file:
-        path: "{{ template_role_config_dir }}"
-        state: directory
-        owner: root
-        group: root
-        mode: "0755"
+- name: Install packages
+  ansible.builtin.include_tasks:
+    file: packages.yml
+    apply:
+      tags: [linux, packages]
+  when: (linux_packages | length > 0) or (linux_packages_absent | length > 0)
+  tags: [linux, packages]
 
-    - name: Render the configuration file
-      ansible.builtin.template:
-        src: config.ini.j2
-        dest: "{{ template_role_config_dir }}/config.ini"
-        owner: root
-        group: root
-        mode: "0644"
-        backup: true
-      notify: template_role config changed
+- name: Configure users
+  ansible.builtin.include_tasks:
+    file: users.yml
+    apply:
+      tags: [linux, users]
+  when: (linux_users | length > 0) or (linux_groups | length > 0)
+  tags: [linux, users]
+
+- name: Configure the SSH server
+  ansible.builtin.include_tasks:
+    file: ssh.yml
+    apply:
+      tags: [linux, ssh]
+  when: linux_sshd_configure | bool
+  tags: [linux, ssh]
+
+- name: Configure storage
+  ansible.builtin.include_tasks:
+    file: storage.yml
+    apply:
+      tags: [linux, storage]
+  when: (linux_partitions | length > 0) or (linux_lvm_volume_groups | length > 0) or
+        (linux_lvm_volumes | length > 0) or (linux_filesystems | length > 0) or
+        (linux_mounts | length > 0)
+  tags: [linux, storage]
+
+- name: Configure sysctl settings
+  ansible.builtin.include_tasks:
+    file: sysctl.yml
+    apply:
+      tags: [linux, sysctl]
+  when: (linux_sysctl | length > 0) or (linux_sysctl_absent | length > 0)
+  tags: [linux, sysctl]
+
+- name: Configure resource limits
+  ansible.builtin.include_tasks:
+    file: limits.yml
+    apply:
+      tags: [linux, limits]
+  when: (linux_limits | length > 0) or (linux_systemd_limits | length > 0)
+  tags: [linux, limits]

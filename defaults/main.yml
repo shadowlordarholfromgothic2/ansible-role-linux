@@ -1,29 +1,235 @@
 ---
-# ==============================================================================
-# template_role - role interface
-# ==============================================================================
-# Everything a user of the role may override lives here, with a comment.
-# Internal constants that must not be overridden go to vars/main.yml.
+# ─────────────────────────────────────────────────────────────────────────────
+# roles/linux — basic setup of Linux VMs
 #
-# Every variable starts with the role name (ansible-lint enforces this).
-# ==============================================================================
+# Every feature is opt-in: with the defaults below the role is a no-op.
+# ─────────────────────────────────────────────────────────────────────────────
 
-# ---------- state -------------------------------------------------------------
+# ── Timezone ────────────────────────────────────────────────────────────────
+# Empty string means "leave the timezone alone".
+linux_timezone: ""
+# "UTC" or "local" — how the hardware clock is interpreted. Empty = unchanged.
+linux_hwclock: ""
+# Cron reads /etc/localtime at start-up only, so it is restarted after a change.
+linux_timezone_restart_cron: true
 
-# present -> the role's config is installed
-# absent  -> the role's config is removed
-template_role_state: present
+# ── Groups ──────────────────────────────────────────────────────────────────
+# - name: deploy
+#   gid: 1500          # optional
+#   system: false      # optional
+#   state: present     # optional
+linux_groups: []
 
-# ---------- paths -------------------------------------------------------------
+# ── Users ───────────────────────────────────────────────────────────────────
+# - name: deploy
+#   comment: "Deployment user"        # optional
+#   uid: 1500                         # optional
+#   group: deploy                     # optional, primary group (must exist)
+#   groups: [sudo, docker]            # optional, supplementary groups
+#   append: true                      # optional, default true
+#   shell: /bin/bash                  # optional, default linux_user_shell
+#   home: /home/deploy                # optional
+#   create_home: true                 # optional, default true
+#   system: false                     # optional
+#   password_lock: false              # optional
+#   expires: -1                       # optional, account expiry (epoch)
+#   ssh_keys:                         # optional, string or list of strings
+#     - "ssh-ed25519 AAAA... kirgo@laptop"
+#   ssh_keys_exclusive: false         # optional, prune keys not listed here
+#   sudo: true                        # optional, default false
+#   sudo_nopasswd: true               # optional, default linux_sudo_nopasswd
+#   sudo_rules:                       # optional, overrides sudo/sudo_nopasswd
+#     - "ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart nginx"
+#   state: present                    # present | absent
+#   remove: false                     # only with state: absent — delete $HOME
+linux_users: []
 
-# Where the role writes its configuration on the managed host.
-template_role_config_dir: /etc/template_role
-
-# ---------- configuration -----------------------------------------------------
-
-# Key/value pairs rendered into {{ template_role_config_dir }}/config.ini.
+# Passwords live in a *separate*, vault-encrypted variable so that `linux_users`
+# itself can stay in plain group_vars. Keys are user names:
 #
-# template_role_settings:
-#   log_level: info
-#   listen: "127.0.0.1:8080"
-template_role_settings: {}
+#   linux_user_passwords:
+#     deploy: "s3cret"                          # plaintext, hashed by the role
+#     backup: "$6$rounds=656000$abc...$def..."  # already a crypt(3) hash
+#
+# Values that look like a crypt hash ($6$..., $y$..., $2b$...) are used as-is,
+# anything else is hashed with linux_user_password_algorithm. Users without an
+# entry keep whatever password they have (new users get none).
+linux_user_passwords: {}
+linux_user_password_algorithm: sha512
+# Salt for hashing plaintext passwords. It is mixed with the user name, so each
+# user gets a distinct but *stable* salt — without this the hash, and therefore
+# /etc/shadow, would change on every run. Override it per environment.
+linux_user_password_salt: "proxmox-lab"
+# always = enforce the declared password on every run
+# on_create = only set it when the account is created
+linux_user_update_password: always
+# Hide the user task output (it contains password hashes).
+linux_users_no_log: true
+linux_user_shell: /bin/bash
+
+# ── sudo ────────────────────────────────────────────────────────────────────
+linux_sudo_nopasswd: true
+linux_sudo_package: sudo
+linux_sudoers_file_prefix: "60-ansible-"
+linux_visudo_path: /usr/sbin/visudo
+
+# ── SSH server ──────────────────────────────────────────────────────────────
+# Global sshd settings, written to a drop-in in /etc/ssh/sshd_config.d/. Off by
+# default: disabling password and root logins on a host you only reach that way
+# locks you out, so make sure key-based access works first (see linux_users).
+linux_sshd_configure: false
+linux_sshd_pubkey_authentication: true
+linux_sshd_password_authentication: false
+linux_sshd_kbd_interactive_authentication: false
+# yes | no | prohibit-password | forced-commands-only
+linux_sshd_permit_root_login: false
+linux_sshd_max_auth_tries: 3
+
+# sshd keeps the *first* value it reads for a keyword, and the distributions
+# include sshd_config.d/*.conf at the very top of sshd_config — the 00- prefix
+# makes this file win over e.g. Ubuntu's 50-cloud-init.conf.
+linux_sshd_config_file: /etc/ssh/sshd_config.d/00-ansible.conf
+linux_sshd_package: openssh-server
+linux_sshd_path: /usr/sbin/sshd
+linux_sshd_service: "{{ 'ssh' if ansible_facts.os_family == 'Debian' else 'sshd' }}"
+
+# ── Additional repositories ─────────────────────────────────────────────────
+# Signing keys fetched into /etc/apt/keyrings. Use `dest` with a .gpg suffix for
+# binary (dearmored) keys; the default .asc suffix expects an armored key.
+# - name: docker
+#   url: https://download.docker.com/linux/ubuntu/gpg
+#   dest: /etc/apt/keyrings/docker.asc   # optional
+linux_apt_keyring_dir: /etc/apt/keyrings
+linux_apt_keys: []
+
+# Modern deb822 sources (/etc/apt/sources.list.d/<name>.sources).
+# `signed_by` may be a keyring path, a key URL or an inline armored key.
+# - name: docker
+#   uris: https://download.docker.com/linux/ubuntu
+#   suites: ["{{ ansible_facts.distribution_release }}"]
+#   components: [stable]
+#   types: [deb]
+#   architectures: [amd64]
+#   signed_by: /etc/apt/keyrings/docker.asc
+#   state: present
+linux_apt_repositories: []
+
+# One-line sources, for repos that are easier to express that way. Written to
+# /etc/apt/sources.list.d/<filename>.list.
+# - filename: foo        # required, without the .list suffix
+#   repo: "deb [signed_by=/etc/apt/keyrings/foo.asc] https://example.org/deb stable main"
+#   state: present       # optional
+linux_apt_repositories_legacy: []
+
+# RedHat-family repositories (ansible.builtin.yum_repository parameters).
+# - name: docker-ce
+#   description: Docker CE Stable
+#   baseurl: https://download.docker.com/linux/centos/$releasever/$basearch/stable
+#   gpgkey: https://download.docker.com/linux/centos/gpg
+#   gpgcheck: true
+linux_yum_repositories: []
+
+# ── Packages ────────────────────────────────────────────────────────────────
+linux_packages: []
+linux_packages_absent: []
+linux_packages_state: present
+# apt-only knobs
+linux_apt_cache_valid_time: 3600
+linux_apt_install_recommends: true
+
+# ── Upgrade ─────────────────────────────────────────────────────────────────
+linux_upgrade: false
+# apt only: safe | full | dist | yes
+linux_upgrade_type: safe
+linux_upgrade_autoremove: true
+# Reboot when the system says it needs one (checked after the upgrade).
+linux_reboot_if_required: false
+linux_reboot_timeout: 600
+
+# ── Storage ─────────────────────────────────────────────────────────────────
+# Install parted / lvm2 / mkfs tooling as needed.
+linux_storage_install_packages: true
+linux_storage_packages:
+  - parted
+  - lvm2
+# fstype -> package providing its mkfs
+linux_filesystem_packages:
+  ext2: e2fsprogs
+  ext3: e2fsprogs
+  ext4: e2fsprogs
+  xfs: xfsprogs
+  btrfs: btrfs-progs
+  vfat: dosfstools
+  f2fs: f2fs-tools
+
+# Partitions (community.general.parted).
+# - device: /dev/sdb
+#   number: 1
+#   label: gpt          # optional, default gpt
+#   part_start: 0%      # optional, default 0%
+#   part_end: 100%      # optional, default 100%
+#   name: data          # optional, GPT partition name
+#   flags: [lvm]        # optional
+#   state: present      # optional
+linux_partitions: []
+
+# How long to wait for a freshly created partition's device node to show up.
+linux_partition_wait_timeout: 30
+
+# LVM volume groups (community.general.lvg).
+# - name: vg_data
+#   pvs: [/dev/sdb1]
+#   pesize: 4M          # optional
+linux_lvm_volume_groups: []
+
+# LVM logical volumes (community.general.lvol).
+# - name: lv_docker
+#   vg: vg_data
+#   size: 50G           # or "100%FREE", "+10G"
+#   resizefs: false     # optional, grow the fs together with the lv
+linux_lvm_volumes: []
+
+# Filesystems (community.general.filesystem).
+# - device: /dev/vg_data/lv_docker
+#   fstype: ext4
+#   opts: "-m 1"        # optional, mkfs options
+#   resizefs: false     # optional
+#   force: false        # optional — DESTRUCTIVE: overwrites an existing fs
+linux_filesystems: []
+
+# fstab entries + mounting (ansible.posix.mount).
+# - path: /var/lib/docker
+#   src: /dev/vg_data/lv_docker   # device, UUID=..., LABEL=...
+#   fstype: ext4
+#   opts: defaults,noatime        # optional, default "defaults"
+#   dump: 0                       # optional
+#   passno: 2                     # optional
+#   state: mounted                # mounted | present | absent | unmounted
+#   owner: root                   # optional, applied after mounting
+#   group: root                   # optional
+#   mode: "0755"                  # optional
+linux_mounts: []
+
+# ── sysctl ──────────────────────────────────────────────────────────────────
+linux_sysctl_file: /etc/sysctl.d/99-ansible.conf
+linux_sysctl_reload: true
+# net.ipv4.ip_forward: 1
+# vm.swappiness: 10
+linux_sysctl: {}
+# Keys to drop from linux_sysctl_file again.
+linux_sysctl_absent: []
+
+# ── ulimits ─────────────────────────────────────────────────────────────────
+linux_limits_file: /etc/security/limits.d/99-ansible.conf
+# - domain: "*"        # user, @group, %group, * , : ranges
+#   type: soft         # soft | hard | -
+#   item: nofile       # nofile, nproc, memlock, ...
+#   value: 65535
+#   comment: "raise the fd limit"   # optional
+linux_limits: []
+
+# limits.conf is enforced by pam_limits, i.e. for login sessions only. systemd
+# services get their limits from systemd, so set those here if you need them.
+# Applied to /etc/systemd/system.conf.d/ and /etc/systemd/user.conf.d/.
+#   DefaultLimitNOFILE: "65535:65535"
+linux_systemd_limits: {}

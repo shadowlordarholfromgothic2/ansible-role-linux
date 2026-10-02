@@ -1,0 +1,120 @@
+---
+# Puts each instance into the state of a VM the role meets in real life: sshd
+# running, a user that already exists, and leftovers of an earlier run that the
+# role has to clean up. Also builds the local repositories converge.yml points
+# the role at, so the test does not depend on a third-party repository.
+- name: Prepare
+  hosts: all
+  become: true
+
+  tasks:
+    # The test images ship without apt lists, so nothing can be installed yet.
+    - name: Update the apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 600
+      when: ansible_facts.os_family == 'Debian'
+
+    - name: Install what a VM has before the role runs
+      ansible.builtin.package:
+        name:
+          - tzdata          # minimal images can lack the zoneinfo database
+          - openssh-server
+          - sudo
+          - tree            # removed again through linux_packages_absent
+        state: present
+
+    # Also creates the host keys on EL, and /run/sshd on Ubuntu: `sshd -t`,
+    # which the role validates its drop-in with, fails without them.
+    - name: Start the SSH daemon
+      ansible.builtin.service:
+        name: "{{ 'ssh' if ansible_facts.os_family == 'Debian' else 'sshd' }}"
+        state: started
+
+    # ── Leftovers the role has to change or clean up ────────────────────────
+    - name: Create a user before the role manages it
+      ansible.builtin.user:
+        name: deploy
+        shell: /bin/sh
+
+    - name: Authorize a key for it that the role has to prune
+      ansible.posix.authorized_key:
+        user: deploy
+        key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAsI/4CV2G4S2i7MJwqH/A2Sqnv+4mdKLumJmuPEblmk stale@molecule
+
+    - name: Create a user the role has to remove
+      ansible.builtin.user:
+        name: olduser
+
+    - name: Grant it sudo the way an earlier run would have
+      ansible.builtin.copy:
+        content: "olduser ALL=(ALL:ALL) NOPASSWD:ALL\n"
+        dest: /etc/sudoers.d/60-ansible-olduser
+        owner: root
+        group: root
+        mode: "0440"
+
+    # Every distribution ships it; the Rocky Linux image is stripped of it.
+    - name: Ensure the sysctl drop-in directory exists
+      ansible.builtin.file:
+        path: /etc/sysctl.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Leave a setting in the sysctl file that the role has to drop
+      ansible.builtin.copy:
+        content: "net.ipv4.tcp_fin_timeout=30\n"
+        dest: /etc/sysctl.d/99-ansible.conf
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Leave a one-line apt source that the role has to remove
+      ansible.builtin.copy:
+        content: "# written by an earlier run\n"
+        dest: /etc/apt/sources.list.d/molecule-stale.list
+        owner: root
+        group: root
+        mode: "0644"
+      when: ansible_facts.os_family == 'Debian'
+
+    # ── Local repositories and a disk image ─────────────────────────────────
+    - name: Install the tooling to build the local repositories
+      ansible.builtin.package:
+        name: "{{ ['gnupg', 'apt-utils'] if ansible_facts.os_family == 'Debian' else ['createrepo_c'] }}"
+        state: present
+
+    - name: Build the local apt repositories
+      ansible.builtin.script:
+        cmd: build-apt-repos.sh /srv/molecule-repo
+        creates: /srv/molecule-repo/molecule.asc
+      when: ansible_facts.os_family == 'Debian'
+
+    - name: Create the directory of the local yum repository
+      ansible.builtin.file:
+        path: /srv/molecule-repo/rpm
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: ansible_facts.os_family == 'RedHat'
+
+    # Empty, but valid: dnf fails on every later operation if it is not.
+    - name: Create the metadata of the local yum repository
+      ansible.builtin.command:
+        cmd: createrepo_c /srv/molecule-repo/rpm
+        creates: /srv/molecule-repo/rpm/repodata/repomd.xml
+      when: ansible_facts.os_family == 'RedHat'
+
+    # A regular file instead of a block device, which the filesystem module
+    # accepts — it keeps mkfs away from the host's disks.
+    - name: Create a disk image to put a filesystem on
+      community.general.filesize:
+        path: /srv/molecule-disk.img
+        size: 32M
+        sparse: true
+        owner: root
+        group: root
+        mode: "0600"

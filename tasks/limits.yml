@@ -1,0 +1,35 @@
+---
+- name: Configure the PAM resource limits
+  ansible.builtin.template:
+    src: limits.conf.j2
+    dest: "{{ linux_limits_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: linux_limits | length > 0
+
+# limits.conf only covers PAM sessions (logins); units started by systemd take
+# their limits from systemd itself.
+- name: Configure the systemd default limits
+  when:
+    - linux_systemd_limits | length > 0
+    - ansible_facts.service_mgr == 'systemd'
+  block:
+    - name: Ensure the systemd drop-in directories exist
+      ansible.builtin.file:
+        path: "/etc/systemd/{{ item }}.conf.d"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop: [system, user]
+
+    - name: Write the systemd limit drop-ins
+      ansible.builtin.template:
+        src: systemd-limits.conf.j2
+        dest: "/etc/systemd/{{ item }}.conf.d/99-ansible-limits.conf"
+        owner: root
+        group: root
+        mode: "0644"
+      loop: [system, user]
+      notify: Reexec systemd
