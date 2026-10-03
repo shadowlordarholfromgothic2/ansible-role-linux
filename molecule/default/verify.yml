@@ -27,6 +27,58 @@
           - verify_etc_timezone is skipped or (verify_etc_timezone.content | b64decode) == "Europe/Berlin\n"
         quiet: true
 
+    # ── CA certificates ─────────────────────────────────────────────────────
+    # A self-signed certificate only verifies when it is in the trust store.
+    - name: Verify the installed CA certificates against the trust store
+      ansible.builtin.command: "openssl verify {{ _ca_dir }}/{{ item }}.crt"
+      loop: [molecule-ca, molecule-inline-ca]
+      changed_when: false
+      vars:
+        _ca_dir: "{{ '/usr/local/share/ca-certificates' if ansible_facts.os_family == 'Debian' else '/etc/pki/ca-trust/source/anchors' }}"
+
+    - name: Verify the removed CA certificate against the trust store
+      ansible.builtin.command: openssl verify /srv/molecule-old-ca.crt
+      register: verify_old_ca
+      changed_when: false
+      failed_when: verify_old_ca.rc == 0
+
+    # The link only exists on Debian, where update-ca-certificates removes it
+    # with --fresh alone.
+    - name: Look for the removed CA certificate and its link in /etc/ssl/certs
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /usr/local/share/ca-certificates/molecule-old-ca.crt
+        - /etc/pki/ca-trust/source/anchors/molecule-old-ca.crt
+        - /etc/ssl/certs/molecule-old-ca.pem
+      register: verify_old_ca_files
+
+    - name: Assert the removed CA certificate is gone
+      ansible.builtin.assert:
+        that: verify_old_ca_files.results | selectattr('stat.exists') | list | length == 0
+        quiet: true
+
+    # update-ca-certificates would only warn about such a file and skip it.
+    - name: Install a CA certificate that is not PEM-encoded
+      block:
+        - name: Run the role with a broken CA certificate
+          ansible.builtin.include_role:
+            name: homelab.linux
+          vars:
+            linux_ca_certificates:
+              - {name: molecule-broken, content: not a certificate}
+
+        - name: Fail, the role went on
+          ansible.builtin.fail:
+            msg: The role installed a CA certificate that is not PEM-encoded.
+      rescue:
+        - name: Assert the role stopped at the PEM check
+          ansible.builtin.assert:
+            that: >-
+              ansible_failed_result.results | map(attribute='msg', default='')
+              | select('search', "'molecule-broken' is not PEM-encoded") | list | length == 1
+            quiet: true
+
     # ── Packages and repositories ───────────────────────────────────────────
     - name: Gather the installed packages
       ansible.builtin.package_facts:

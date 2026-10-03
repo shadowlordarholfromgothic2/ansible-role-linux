@@ -32,6 +32,23 @@ _linux_sshd_settings:
   PermitRootLogin: "{{ linux_sshd_permit_root_login }}"
   MaxAuthTries: "{{ linux_sshd_max_auth_tries }}"
 
+# Where each family looks for local CA certificates, and the command that
+# rebuilds the trust store from them. Without --fresh, update-ca-certificates
+# leaves the /etc/ssl/certs links of a removed certificate behind.
+_linux_ca_trust:
+  Debian:
+    dir: /usr/local/share/ca-certificates
+    command: [update-ca-certificates, --fresh]
+  RedHat:
+    dir: /etc/pki/ca-trust/source/anchors
+    command: [update-ca-trust, extract]
+
+# The PEM certificate of the linux_ca_certificates entry in `item`, given inline
+# or read from a file on the controller, without surrounding whitespace.
+_linux_ca_certificate: >-
+  {{ (item.content if item.content is defined
+      else lookup('ansible.builtin.file', item.src)) | trim }}
+
 # Whether repositories.yml added or changed a repository in this run. The
 # results are undefined when it was skipped altogether.
 _linux_repositories_changed: >-

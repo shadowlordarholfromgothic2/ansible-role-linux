@@ -1,7 +1,7 @@
 # `linux` role
 
-Basic setup of Linux VMs: users, SSH server settings, timezone, packages (incl. extra repositories),
-package upgrades, disk partitions / LVM / filesystems / mounts, sysctl settings
+Basic setup of Linux VMs: users, SSH server settings, timezone, trusted CA certificates,
+packages (incl. extra repositories), package upgrades, disk partitions / LVM / filesystems / mounts, sysctl settings
 and ulimits.
 
 Everything is opt-in — with the defaults the role changes nothing, so you can
@@ -24,8 +24,8 @@ enable one feature at a time per host or group.
     - role: linux
 ```
 
-Tags: `timezone`, `repositories`, `upgrade`, `packages`, `users`, `ssh`, `storage`,
-`sysctl`, `limits` — plus `linux` for all of them.
+Tags: `timezone`, `ca_certificates`, `repositories`, `upgrade`, `packages`, `users`,
+`ssh`, `storage`, `sysctl`, `limits` — plus `linux` for all of them.
 
 ```bash
 ansible-playbook linux.yml --tags users,packages
@@ -132,6 +132,40 @@ linux_hwclock: UTC            # optional
 Cron is restarted afterwards because it only reads `/etc/localtime` at start-up.
 On systemd hosts `timedatectl` does not touch Debian's `/etc/timezone`, so the
 role keeps that file in sync itself.
+
+## CA certificates
+
+```yaml
+linux_ca_certificates:
+  - name: homelab-root              # installed as homelab-root.crt
+    src: certs/homelab-root.crt     # a PEM file on the controller ...
+  - name: homelab-issuing
+    content: |                      # ... or the certificate itself
+      -----BEGIN CERTIFICATE-----
+      MIIBkzCCATmgAwIBAgIU...
+      -----END CERTIFICATE-----
+  - name: old-root
+    remove: true                    # take it out of the trust store again
+```
+
+The certificates go to the directory each family reads local CAs from —
+`/usr/local/share/ca-certificates/` on Debian/Ubuntu,
+`/etc/pki/ca-trust/source/anchors/` on RedHat. Whenever one was added, changed
+or removed, the trust store is rebuilt with `update-ca-certificates --fresh`
+(`--fresh` also drops the `/etc/ssl/certs` links of a removed certificate) or
+`update-ca-trust extract`. That happens right away rather than at the end of the
+play, so the [repositories](#packages-and-repositories) configured next may
+already be served with a certificate from one of these CAs.
+
+`src` is looked up like `copy`'s: a relative path is searched in the `files/`
+directory next to the playbook. Every entry must hold a PEM certificate; the
+role checks that on the controller before changing anything, since
+`update-ca-certificates` would only warn about anything else and leave it out.
+Keep one certificate per entry: Debian adds a file with several of them to the
+bundle, but skips it for the hashed lookup in `/etc/ssl/certs`.
+
+Dropping an entry from the list leaves its file on the host — set
+`remove: true` instead.
 
 ## Packages and repositories
 

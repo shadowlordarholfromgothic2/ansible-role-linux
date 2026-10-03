@@ -7,6 +7,27 @@
     # ── Timezone ────────────────────────────────────────────────────────────
     linux_timezone: Europe/Berlin
 
+    # ── CA certificates ─────────────────────────────────────────────────────
+    linux_ca_certificates:
+      - name: molecule-ca
+        src: molecule-ca.crt            # molecule/default/files/
+      - name: molecule-inline-ca
+        content: |
+          -----BEGIN CERTIFICATE-----
+          MIIBojCCAUegAwIBAgIULbbXmReXmVT3lBrBEZXK7TKb6TMwCgYIKoZIzj0EAwIw
+          HTEbMBkGA1UEAwwSbW9sZWN1bGUtaW5saW5lLWNhMCAXDTI2MTAwMzE3MjkzOVoY
+          DzIxMjYwOTA5MTcyOTM5WjAdMRswGQYDVQQDDBJtb2xlY3VsZS1pbmxpbmUtY2Ew
+          WTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARU7QseK15RPYMY+VDDUvjSM7ZVE2yh
+          VtVQwzLyXPp43AJ5Jn8U3W7euKfAdrhYy3p6YBtjh8bnNNVbeGh+iFl7o2MwYTAd
+          BgNVHQ4EFgQUX58w3pmBu5Yn6Zkg/rDMP9jyfXswHwYDVR0jBBgwFoAUX58w3pmB
+          u5Yn6Zkg/rDMP9jyfXswDwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8EBAMCAQYw
+          CgYIKoZIzj0EAwIDSQAwRgIhANfnZL3erqqJy3qZZZzcuPmkcug9h5RkXnUhAu4B
+          AFxVAiEAlUVwijTzNgeB7fImtrDJJLu+OoxRdh+gIZs2wNyzTw4=
+          -----END CERTIFICATE-----
+      # Trusted by prepare.yml.
+      - name: molecule-old-ca
+        remove: true
+
     # ── Repositories: the local ones prepare.yml built ─────────────────────
     linux_apt_keys:
       - name: molecule

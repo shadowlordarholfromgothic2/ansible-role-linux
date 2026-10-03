@@ -95,6 +95,22 @@ linux_sshd_path: /usr/sbin/sshd
 # role gathers facts, hence the default().
 linux_sshd_service: "{{ 'ssh' if ansible_facts.os_family | default('') == 'Debian' else 'sshd' }}"
 
+# ── CA certificates ─────────────────────────────────────────────────────────
+# Extra certificate authorities for the system trust store, one PEM certificate
+# per entry, installed as <name>.crt into /usr/local/share/ca-certificates
+# (Debian) or /etc/pki/ca-trust/source/anchors (RedHat). Dropping an entry from
+# the list leaves its file on the host; mark it `remove: true` instead.
+# - name: homelab-root                  # file name, without the .crt suffix
+#   src: certs/homelab-root.crt         # a PEM file on the controller ...
+# - name: homelab-issuing
+#   content: |                          # ... or the certificate itself
+#     -----BEGIN CERTIFICATE-----
+#     ...
+#     -----END CERTIFICATE-----
+# - name: old-root
+#   remove: true                        # delete it from the trust store
+linux_ca_certificates: []
+
 # ── Additional repositories ─────────────────────────────────────────────────
 # Signing keys fetched into /etc/apt/keyrings. Use `dest` with a .gpg suffix for
 # binary (dearmored) keys; the default .asc suffix expects an armored key.

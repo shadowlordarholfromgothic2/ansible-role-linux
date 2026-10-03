@@ -10,9 +10,10 @@ argument_specs:
   main:
     short_description: Basic setup of Linux VMs
     description:
-      - Configures users and groups, the SSH server, the timezone, packages and
-        extra repositories, package upgrades, partitions, LVM, filesystems and
-        mounts, sysctl settings and resource limits.
+      - Configures users and groups, the SSH server, the timezone, trusted CA
+        certificates, packages and extra repositories, package upgrades,
+        partitions, LVM, filesystems and mounts, sysctl settings and resource
+        limits.
       - Every feature is opt-in. With the defaults the role changes nothing.
       - Supports Debian- and RedHat-family hosts.
     author:
@@ -280,6 +281,42 @@ argument_specs:
         description:
           - Name of the SSH server service, reloaded after a change.
           - Defaults to V(ssh) on Debian-family hosts and V(sshd) elsewhere.
+
+      # ── CA certificates ───────────────────────────────────────────────────
+      linux_ca_certificates:
+        type: list
+        elements: dict
+        default: []
+        description:
+          - Extra certificate authorities for the system trust store, installed
+            as C(<name>.crt) into C(/usr/local/share/ca-certificates/) (Debian
+            family) or C(/etc/pki/ca-trust/source/anchors/) (RedHat family).
+          - The trust store is rebuilt as soon as a certificate is added,
+            changed or removed, before the role configures the repositories.
+          - An entry dropped from the list stays on the host. Set
+            O(linux_ca_certificates[].remove) to delete it.
+        options:
+          name:
+            type: str
+            required: true
+            description: Name of the certificate file, without the C(.crt) suffix.
+          content:
+            type: str
+            description: The PEM-encoded certificate.
+          src:
+            type: path
+            description:
+              - File on the controller with the PEM-encoded certificate.
+              - A relative path is looked up as by M(ansible.builtin.copy), in
+                the C(files/) directories of the role and the playbook.
+          remove:
+            type: bool
+            default: false
+            description: Delete the certificate and drop it from the trust store.
+        mutually_exclusive:
+          - [content, src]
+        required_if:
+          - [remove, false, [content, src], true]
 
       # ── Additional repositories ───────────────────────────────────────────
       linux_apt_keyring_dir:
