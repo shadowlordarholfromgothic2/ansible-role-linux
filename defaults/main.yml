@@ -91,14 +91,18 @@ linux_sshd_max_auth_tries: 3
 linux_sshd_config_file: /etc/ssh/sshd_config.d/00-ansible.conf
 linux_sshd_package: openssh-server
 linux_sshd_path: /usr/sbin/sshd
-linux_sshd_service: "{{ 'ssh' if ansible_facts.os_family == 'Debian' else 'sshd' }}"
+# The argument validation (meta/argument_specs.yml) templates this before the
+# role gathers facts, hence the default().
+linux_sshd_service: "{{ 'ssh' if ansible_facts.os_family | default('') == 'Debian' else 'sshd' }}"
 
 # ── Additional repositories ─────────────────────────────────────────────────
 # Signing keys fetched into /etc/apt/keyrings. Use `dest` with a .gpg suffix for
 # binary (dearmored) keys; the default .asc suffix expects an armored key.
+# A key that is already on disk is not fetched again unless `force` is set.
 # - name: docker
 #   url: https://download.docker.com/linux/ubuntu/gpg
 #   dest: /etc/apt/keyrings/docker.asc   # optional
+#   force: false                         # optional — re-fetch on every run
 linux_apt_keyring_dir: /etc/apt/keyrings
 linux_apt_keys: []
 

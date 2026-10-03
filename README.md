@@ -31,6 +31,13 @@ Tags: `timezone`, `repositories`, `upgrade`, `packages`, `users`, `ssh`, `storag
 ansible-playbook linux.yml --tags users,packages
 ```
 
+Every variable is described in [meta/argument_specs.yml](meta/argument_specs.yml)
+(`ansible-doc -t role` shows them) and checked against it before the role runs:
+a wrong type, an unknown key in a list entry (say, a typo in a `linux_users`
+item) or a missing required key fails the play up front. The check templates
+the variables before the role gathers facts, so in a play with
+`gather_facts: false` they must not refer to `ansible_facts`.
+
 ## Users
 
 ```yaml
@@ -145,10 +152,12 @@ linux_apt_install_recommends: false
 ```
 
 Keys are fetched into `/etc/apt/keyrings/<name>.asc`; for a binary (dearmored)
-key set `dest:` with a `.gpg` suffix. The apt cache is refreshed immediately
-after a repository change, so packages from the new repo can be installed in the
-same run. `python3-debian`, which `deb822_repository` needs, is installed
-automatically.
+key set `dest:` with a `.gpg` suffix. A key that is already present is left
+alone, without contacting the server; set `force: true` on the entry to fetch it
+again (e.g. after the vendor rotated it), and drop it once done. The apt cache
+is refreshed immediately after a repository change, so packages from the new
+repo can be installed in the same run. `python3-debian`, which
+`deb822_repository` needs, is installed automatically.
 
 In check mode a new repository is never really written, so its packages cannot
 be found yet. When a repository changed in the same run, "No package … available"
@@ -205,6 +214,11 @@ Notes:
 * Mount point ownership is applied after mounting, so it lands on the mounted
   filesystem and not on the directory underneath.
 * `linux_mounts` entries with `state: present` only write the fstab line.
+* In check mode nothing is really created, so a step that needs a partition,
+  volume group or logical volume added in the same run — or a mount point owner
+  or group from `linux_users`/`linux_groups` — cannot find it. Such a step is
+  reported as changed and listed at the end instead of failing, but only when
+  the step that adds it changed something; otherwise it still fails.
 
 ## sysctl
 

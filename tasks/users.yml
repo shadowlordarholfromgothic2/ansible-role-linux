@@ -19,6 +19,7 @@
   loop: "{{ linux_groups }}"
   loop_control:
     label: "{{ item.name }}"
+  register: linux_groups_result
 
 - name: Ensure the declared users exist
   ansible.builtin.user:
@@ -41,6 +42,7 @@
   loop: "{{ _linux_users_present }}"
   loop_control:
     label: "{{ item.name }}"
+  register: linux_users_result
   vars:
     # An inline `password:` wins over the (vault-encrypted) password map.
     _linux_password_raw: "{{ item.password | default(linux_user_passwords[item.name] | default('')) }}"
@@ -55,12 +57,26 @@
                 ((item.name ~ linux_user_password_salt) | hash('sha512'))[0:16]) }}
   no_log: "{{ linux_users_no_log | bool }}"
 
+# In check mode the users added above were never really created, and
+# authorized_key cannot look up their home directory. Find out which ones
+# are missing, to give the module the path their keys would go to instead.
+- name: Look up the existing users
+  ansible.builtin.getent:
+    database: passwd
+  when:
+    - ansible_check_mode
+    - _linux_users_ssh_keys | length > 0
+
 - name: Manage the authorized SSH keys
   ansible.posix.authorized_key:
     user: "{{ item.name }}"
     key: "{{ ([item.ssh_keys] if item.ssh_keys is string else item.ssh_keys) | join('\n') }}"
     exclusive: "{{ item.ssh_keys_exclusive | default(false) }}"
     manage_dir: true
+    path: >-
+      {{ (item.home | default('/home/' ~ item.name)) ~ '/.ssh/authorized_keys'
+         if ansible_check_mode and item.name not in ansible_facts.getent_passwd
+         else omit }}
     state: present
   loop: "{{ _linux_users_ssh_keys }}"
   loop_control:

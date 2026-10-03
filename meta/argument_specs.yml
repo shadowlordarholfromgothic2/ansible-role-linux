@@ -1,0 +1,819 @@
+---
+# The role's variables, for `ansible-doc -t role` and for the argument
+# validation Ansible runs before the role's first task. The defaults here are
+# documentation only — the role takes its values from defaults/main.yml, so keep
+# the two in sync.
+#
+# Validation templates every variable listed below before the role gathers
+# facts, so a value that refers to ansible_facts needs a play that gathers them.
+argument_specs:
+  main:
+    short_description: Basic setup of Linux VMs
+    description:
+      - Configures users and groups, the SSH server, the timezone, packages and
+        extra repositories, package upgrades, partitions, LVM, filesystems and
+        mounts, sysctl settings and resource limits.
+      - Every feature is opt-in. With the defaults the role changes nothing.
+      - Supports Debian- and RedHat-family hosts.
+    author:
+      - kirgo
+    options:
+      # ── Timezone ──────────────────────────────────────────────────────────
+      linux_timezone:
+        type: str
+        default: ""
+        description:
+          - The timezone to set, for example V(Europe/Berlin).
+          - An empty string leaves the timezone alone.
+      linux_hwclock:
+        type: str
+        default: ""
+        choices: ["", UTC, local]
+        description:
+          - How the hardware clock is interpreted. An empty string leaves it
+            unchanged.
+          - Only applied together with O(linux_timezone).
+      linux_timezone_restart_cron:
+        type: bool
+        default: true
+        description:
+          - Restart cron after a timezone change. Cron reads C(/etc/localtime)
+            at start-up only.
+
+      # ── Groups ────────────────────────────────────────────────────────────
+      linux_groups:
+        type: list
+        elements: dict
+        default: []
+        description:
+          - Groups to manage. They are created before O(linux_users).
+        options:
+          name:
+            type: str
+            required: true
+            description: Name of the group.
+          gid:
+            type: int
+            description: Group ID.
+          system:
+            type: bool
+            description: Create a system group.
+          state:
+            type: str
+            choices: [present, absent]
+            default: present
+            description: Whether the group should exist.
+
+      # ── Users ─────────────────────────────────────────────────────────────
+      linux_users:
+        type: list
+        elements: dict
+        default: []
+        description:
+          - Users to manage, with their SSH keys and sudo rights.
+          - Keep passwords out of this list, in the vault-encrypted
+            O(linux_user_passwords).
+        options:
+          name:
+            type: str
+            required: true
+            description: Name of the user.
+          comment:
+            type: str
+            description: Comment (GECOS) field of the account.
+          uid:
+            type: int
+            description: User ID.
+          group:
+            type: str
+            description: Primary group. It must exist already, or be listed in O(linux_groups).
+          groups:
+            type: list
+            elements: str
+            description: Supplementary groups.
+          append:
+            type: bool
+            default: true
+            description:
+              - Add O(linux_users[].groups) to the groups the user is in already.
+                With V(false) the user is removed from every other supplementary group.
+              - Only used together with O(linux_users[].groups).
+          shell:
+            type: str
+            description: Login shell. Defaults to O(linux_user_shell).
+          home:
+            type: path
+            description: Home directory. Defaults to the system default, usually C(/home/<name>).
+          create_home:
+            type: bool
+            default: true
+            description: Create the home directory.
+          system:
+            type: bool
+            default: false
+            description: Create a system account.
+          password_lock:
+            type: bool
+            description: Lock (V(true)) or unlock (V(false)) the password.
+          expires:
+            type: float
+            description: Account expiry as seconds since the epoch. V(-1) removes the expiry.
+          password:
+            type: str
+            no_log: true
+            description:
+              - Password, either plaintext or a crypt(3) hash.
+              - Takes precedence over O(linux_user_passwords), which is the
+                better place for it.
+          update_password:
+            type: str
+            choices: [always, on_create]
+            description: Overrides O(linux_user_update_password) for this user.
+          ssh_keys:
+            type: list
+            elements: str
+            description:
+              - Public keys to add to the user's C(authorized_keys).
+              - A single key may be given as a string.
+          ssh_keys_exclusive:
+            type: bool
+            default: false
+            description:
+              - Remove every key that is not in O(linux_users[].ssh_keys).
+              - Only applied when O(linux_users[].ssh_keys) is set.
+          sudo:
+            type: bool
+            default: false
+            description:
+              - Grant sudo rights through a drop-in in C(/etc/sudoers.d/).
+              - Setting it back to V(false) removes the drop-in again.
+          sudo_nopasswd:
+            type: bool
+            description:
+              - Allow sudo without a password. Defaults to O(linux_sudo_nopasswd).
+              - Ignored when O(linux_users[].sudo_rules) is set.
+          sudo_rules:
+            type: list
+            elements: str
+            description:
+              - >-
+                Sudoers rules for the user, written after the user name, for
+                example V(ALL=(ALL\) NOPASSWD: /usr/bin/systemctl restart nginx).
+              - They replace the default V(ALL=(ALL:ALL\) NOPASSWD:ALL) and still
+                need O(linux_users[].sudo).
+          state:
+            type: str
+            choices: [present, absent]
+            default: present
+            description: Whether the user should exist.
+          remove:
+            type: bool
+            default: false
+            description: With O(linux_users[].state=absent), delete the home directory and mail spool as well.
+          force:
+            type: bool
+            description: With O(linux_users[].state=absent), remove the user even while it is logged in.
+
+      linux_user_passwords:
+        type: dict
+        default: {}
+        no_log: true
+        description:
+          - User passwords, keyed by user name. Keep this variable vault-encrypted.
+          - A value that looks like a crypt(3) hash (V($6$...), V($y$...),
+            V($2b$...)) is used as it is. Anything else is hashed with
+            O(linux_user_password_algorithm).
+          - Users without an entry keep their password; new users get none.
+      linux_user_password_algorithm:
+        type: str
+        default: sha512
+        description: Hash algorithm for plaintext passwords, as understood by the C(password_hash) filter.
+      linux_user_password_salt:
+        type: str
+        default: proxmox-lab
+        no_log: true
+        description:
+          - Salt for hashing plaintext passwords. It is combined with the user
+            name, which gives every user a distinct salt that stays the same
+            across runs.
+          - Override it per environment and treat it as a secret.
+      linux_user_update_password:
+        type: str
+        default: always
+        choices: [always, on_create]
+        description:
+          - V(always) enforces the declared password on every run.
+          - V(on_create) only sets it when the account is created.
+      linux_users_no_log:
+        type: bool
+        default: true
+        description: Hide the output of the user task, which contains password hashes.
+      linux_user_shell:
+        type: str
+        default: /bin/bash
+        description: Login shell for users that do not set O(linux_users[].shell).
+
+      # ── sudo ──────────────────────────────────────────────────────────────
+      linux_sudo_nopasswd:
+        type: bool
+        default: true
+        description: Default for O(linux_users[].sudo_nopasswd).
+      linux_sudo_package:
+        type: str
+        default: sudo
+        description: Package that provides sudo. Installed when a user has O(linux_users[].sudo).
+      linux_sudoers_file_prefix:
+        type: str
+        default: 60-ansible-
+        description: Name prefix of the drop-ins in C(/etc/sudoers.d/). The user name follows it.
+      linux_visudo_path:
+        type: path
+        default: /usr/sbin/visudo
+        description: visudo binary, used to check the drop-ins before they are installed.
+
+      # ── SSH server ────────────────────────────────────────────────────────
+      linux_sshd_configure:
+        type: bool
+        default: false
+        description:
+          - Write the global sshd settings below to O(linux_sshd_config_file).
+          - With the defaults this turns off password and root logins. Make sure
+            key-based access works before enabling it.
+      linux_sshd_pubkey_authentication:
+        type: bool
+        default: true
+        description: sshd C(PubkeyAuthentication).
+      linux_sshd_password_authentication:
+        type: bool
+        default: false
+        description: sshd C(PasswordAuthentication).
+      linux_sshd_kbd_interactive_authentication:
+        type: bool
+        default: false
+        description: sshd C(KbdInteractiveAuthentication).
+      linux_sshd_permit_root_login:
+        type: raw
+        default: false
+        choices: [true, false, "yes", "no", prohibit-password, forced-commands-only]
+        description: sshd C(PermitRootLogin). Booleans are written as C(yes) or C(no).
+      linux_sshd_max_auth_tries:
+        type: int
+        default: 3
+        description: sshd C(MaxAuthTries).
+      linux_sshd_config_file:
+        type: path
+        default: /etc/ssh/sshd_config.d/00-ansible.conf
+        description:
+          - sshd drop-in that receives the settings.
+          - sshd keeps the first value it reads for a keyword, so the name must
+            sort before every other drop-in that sets the same keywords.
+      linux_sshd_package:
+        type: str
+        default: openssh-server
+        description: Package that provides the SSH server.
+      linux_sshd_path:
+        type: path
+        default: /usr/sbin/sshd
+        description: sshd binary, used to check the configuration.
+      linux_sshd_service:
+        type: str
+        description:
+          - Name of the SSH server service, reloaded after a change.
+          - Defaults to V(ssh) on Debian-family hosts and V(sshd) elsewhere.
+
+      # ── Additional repositories ───────────────────────────────────────────
+      linux_apt_keyring_dir:
+        type: path
+        default: /etc/apt/keyrings
+        description: Directory for the keys in O(linux_apt_keys).
+      linux_apt_keys:
+        type: list
+        elements: dict
+        default: []
+        description:
+          - Repository signing keys to fetch (Debian family).
+          - A key that is already on disk is not fetched again unless
+            O(linux_apt_keys[].force) is set.
+        options:
+          name:
+            type: str
+            required: true
+            description: Name of the key. The default file name is derived from it.
+          url:
+            type: str
+            required: true
+            description: Where to fetch the key from.
+          dest:
+            type: path
+            description:
+              - Where to store the key. Defaults to C(<linux_apt_keyring_dir>/<name>.asc),
+                which expects an armored key.
+              - Use a C(.gpg) suffix for a binary (dearmored) key.
+          force:
+            type: bool
+            default: false
+            description: Fetch the key on every run, for example after the vendor rotated it.
+      linux_apt_repositories:
+        type: list
+        elements: dict
+        default: []
+        description:
+          - deb822 sources, written to C(/etc/apt/sources.list.d/<name>.sources)
+            (Debian family).
+          - The options are passed to M(ansible.builtin.deb822_repository).
+        options:
+          name:
+            type: str
+            required: true
+            description: Name of the repository and of its C(.sources) file.
+          uris:
+            type: list
+            elements: str
+            description: Repository URIs.
+          suites:
+            type: list
+            elements: str
+            description: Suites, for example the distribution release.
+          components:
+            type: list
+            elements: str
+            description: Components, for example V(main) or V(stable).
+          types:
+            type: list
+            elements: str
+            choices: [deb, deb-src]
+            description: Package types. The module defaults to V(deb).
+          architectures:
+            type: list
+            elements: str
+            description: Architectures to fetch.
+          signed_by:
+            type: str
+            description: A keyring path, a key URL or an inline armored key.
+          enabled:
+            type: bool
+            description: Whether the source is enabled.
+          trusted:
+            type: bool
+            description: Trust the source even if its signature does not check out.
+          allow_insecure:
+            type: bool
+            description: Allow an unsigned source.
+          mode:
+            type: raw
+            default: "0644"
+            description: File mode of the C(.sources) file.
+          state:
+            type: str
+            choices: [present, absent]
+            default: present
+            description: Whether the source should exist.
+      linux_apt_repositories_legacy:
+        type: list
+        elements: dict
+        default: []
+        description:
+          - One-line sources, written to C(/etc/apt/sources.list.d/<filename>.list)
+            (Debian family).
+        options:
+          filename:
+            type: str
+            required: true
+            description: Name of the C(.list) file, without the suffix.
+          repo:
+            type: str
+            description:
+              - The source line, for example
+                V(deb [signed-by=/etc/apt/keyrings/foo.asc] https://example.org/deb stable main).
+              - Required with O(linux_apt_repositories_legacy[].state=present).
+          mode:
+            type: raw
+            default: "0644"
+            description: File mode of the C(.list) file.
+          state:
+            type: str
+            choices: [present, absent]
+            default: present
+            description: Whether the file should exist.
+        required_if:
+          - [state, present, [repo]]
+      linux_yum_repositories:
+        type: list
+        elements: dict
+        default: []
+        description:
+          - Repositories for RedHat-family hosts.
+          - The options are passed to M(ansible.builtin.yum_repository).
+        options:
+          name:
+            type: str
+            required: true
+            description: Repository ID, also the name of its C(.repo) file.
+          description:
+            type: str
+            description: Human-readable name. Defaults to O(linux_yum_repositories[].name).
+          baseurl:
+            type: list
+            elements: str
+            description: Repository URLs.
+          mirrorlist:
+            type: str
+            description: URL of a mirror list.
+          metalink:
+            type: str
+            description: URL of a metalink file.
+          gpgkey:
+            type: list
+            elements: str
+            description: URLs of the signing keys.
+          gpgcheck:
+            type: bool
+            description: Check the package signatures.
+          enabled:
+            type: bool
+            default: true
+            description: Whether the repository is enabled.
+          priority:
+            type: int
+            description: Repository priority, from 1 (highest) to 99.
+          module_hotfixes:
+            type: bool
+            description: Let packages from this repository override modular filtering.
+          state:
+            type: str
+            choices: [present, absent]
+            default: present
+            description: Whether the repository should exist.
+
+      # ── Packages ──────────────────────────────────────────────────────────
+      linux_packages:
+        type: list
+        elements: str
+        default: []
+        description: Packages to install.
+      linux_packages_absent:
+        type: list
+        elements: str
+        default: []
+        description: Packages to remove.
+      linux_packages_state:
+        type: str
+        default: present
+        choices: [present, latest]
+        description: Whether O(linux_packages) are only installed or also kept up to date.
+      linux_apt_cache_valid_time:
+        type: int
+        default: 3600
+        description: Seconds an apt cache stays valid before it is refreshed (Debian family).
+      linux_apt_install_recommends:
+        type: bool
+        default: true
+        description: Install recommended packages as well (Debian family).
+
+      # ── Upgrade ───────────────────────────────────────────────────────────
+      linux_upgrade:
+        type: bool
+        default: false
+        description: Upgrade all installed packages.
+      linux_upgrade_type:
+        type: str
+        default: safe
+        choices: [safe, full, dist, "yes"]
+        description: Kind of apt upgrade (Debian family). RedHat-family hosts always upgrade everything.
+      linux_upgrade_autoremove:
+        type: bool
+        default: true
+        description: Remove packages that are no longer needed after the upgrade (Debian family).
+      linux_reboot_if_required:
+        type: bool
+        default: false
+        description: Reboot when the system reports that the upgrade needs one.
+      linux_reboot_timeout:
+        type: int
+        default: 600
+        description: Seconds to wait for the host to come back after the reboot.
+
+      # ── Storage ───────────────────────────────────────────────────────────
+      linux_storage_install_packages:
+        type: bool
+        default: true
+        description:
+          - Install O(linux_storage_packages), and the mkfs tooling the
+            filesystems in O(linux_filesystems) need.
+      linux_storage_packages:
+        type: list
+        elements: str
+        default: [parted, lvm2]
+        description: Partitioning and LVM tooling.
+      linux_filesystem_packages:
+        type: dict
+        default:
+          ext2: e2fsprogs
+          ext3: e2fsprogs
+          ext4: e2fsprogs
+          xfs: xfsprogs
+          btrfs: btrfs-progs
+          vfat: dosfstools
+          f2fs: f2fs-tools
+        description: Package that provides the mkfs of each filesystem type.
+      linux_partitions:
+        type: list
+        elements: dict
+        default: []
+        description:
+          - Disk partitions, created first.
+          - The options are passed to M(community.general.parted).
+          - The role fails if a device does not exist.
+        options:
+          device:
+            type: path
+            required: true
+            description: Block device to partition, for example V(/dev/sdb).
+          number:
+            type: int
+            required: true
+            description: Partition number.
+          label:
+            type: str
+            default: gpt
+            choices: [aix, amiga, bsd, dvh, gpt, loop, mac, msdos, pc98, sun]
+            description: Partition table type.
+          part_start:
+            type: str
+            default: 0%
+            description: Where the partition starts.
+          part_end:
+            type: str
+            default: 100%
+            description: Where the partition ends.
+          part_type:
+            type: str
+            choices: [primary, extended, logical]
+            description: Partition type, for an V(msdos) table.
+          name:
+            type: str
+            description: Partition name, for a V(gpt) table.
+          flags:
+            type: list
+            elements: str
+            description: Flags to set, for example V(lvm).
+          unit:
+            type: str
+            choices: [s, B, KB, KiB, MB, MiB, GB, GiB, TB, TiB, "%", cyl, chs, compact]
+            description: Unit of O(linux_partitions[].part_start) and O(linux_partitions[].part_end) when they have none.
+          resize:
+            type: bool
+            description: Resize an existing partition to O(linux_partitions[].part_end).
+          state:
+            type: str
+            choices: [present, absent]
+            default: present
+            description: Whether the partition should exist.
+      linux_partition_wait_timeout:
+        type: int
+        default: 30
+        description: Seconds to wait for the device node of a new partition to appear.
+      linux_lvm_volume_groups:
+        type: list
+        elements: dict
+        default: []
+        description:
+          - LVM volume groups, created after the partitions.
+          - The options are passed to M(community.general.lvg).
+        options:
+          name:
+            type: str
+            description: Name of the volume group.
+          vg:
+            type: str
+            description: Same as O(linux_lvm_volume_groups[].name).
+          pvs:
+            type: list
+            elements: str
+            description: Physical volumes, for example V(/dev/sdb1).
+          pesize:
+            type: str
+            description: Physical extent size, for example V(4M).
+          pv_options:
+            type: str
+            description: Extra options for C(pvcreate).
+          vg_options:
+            type: str
+            description: Extra options for C(vgcreate).
+          force:
+            type: bool
+            default: false
+            description: Allow removing a volume group that still has logical volumes.
+          state:
+            type: str
+            choices: [present, absent, active, inactive]
+            default: present
+            description: Desired state of the volume group.
+        required_one_of:
+          - [name, vg]
+        mutually_exclusive:
+          - [name, vg]
+      linux_lvm_volumes:
+        type: list
+        elements: dict
+        default: []
+        description:
+          - LVM logical volumes, created after the volume groups.
+          - The options are passed to M(community.general.lvol).
+        options:
+          name:
+            type: str
+            description: Name of the logical volume.
+          lv:
+            type: str
+            description: Same as O(linux_lvm_volumes[].name).
+          vg:
+            type: str
+            required: true
+            description: Volume group the logical volume is in.
+          size:
+            type: str
+            description: Size, for example V(50G), V(100%FREE) or V(+10G).
+          pvs:
+            type: list
+            elements: str
+            description: Physical volumes to allocate the logical volume on.
+          opts:
+            type: str
+            description: Extra options for C(lvcreate).
+          thinpool:
+            type: str
+            description: Thin pool to create the logical volume in.
+          snapshot:
+            type: str
+            description: Name of a snapshot of the logical volume to create.
+          resizefs:
+            type: bool
+            default: false
+            description: Resize the filesystem together with the logical volume.
+          shrink:
+            type: bool
+            default: false
+            description: Allow shrinking the logical volume to O(linux_lvm_volumes[].size).
+          force:
+            type: bool
+            default: false
+            description: Allow removing or shrinking the logical volume.
+          active:
+            type: bool
+            description: Whether the logical volume is active.
+          state:
+            type: str
+            choices: [present, absent]
+            default: present
+            description: Whether the logical volume should exist.
+        required_one_of:
+          - [name, lv]
+        mutually_exclusive:
+          - [name, lv]
+      linux_filesystems:
+        type: list
+        elements: dict
+        default: []
+        description:
+          - Filesystems, created after the logical volumes.
+          - The options are passed to M(community.general.filesystem).
+        options:
+          device:
+            type: path
+            description: Device to create the filesystem on.
+          dev:
+            type: path
+            description: Same as O(linux_filesystems[].device).
+          fstype:
+            type: str
+            required: true
+            description: Filesystem type, for example V(ext4) or V(xfs).
+          opts:
+            type: str
+            description: Extra options for mkfs, for example V(-m 1).
+          uuid:
+            type: str
+            description: UUID to give the filesystem.
+          resizefs:
+            type: bool
+            default: false
+            description: Grow the filesystem to the size of its device.
+          force:
+            type: bool
+            default: false
+            description: Overwrite a filesystem of a different type that is already on the device. This destroys its data.
+          state:
+            type: str
+            choices: [present, absent]
+            default: present
+            description: Whether the filesystem should exist.
+        required_one_of:
+          - [device, dev]
+        mutually_exclusive:
+          - [device, dev]
+      linux_mounts:
+        type: list
+        elements: dict
+        default: []
+        description:
+          - Mounts and their fstab entries, configured last.
+          - The options up to O(linux_mounts[].state) are passed to M(ansible.posix.mount).
+        options:
+          path:
+            type: path
+            required: true
+            description: Mount point.
+          src:
+            type: str
+            description: What to mount, for example a device, V(UUID=...) or V(LABEL=...).
+          fstype:
+            type: str
+            description: Filesystem type.
+          opts:
+            type: str
+            default: defaults
+            description: Mount options.
+          dump:
+            type: int
+            description: fstab dump field.
+          passno:
+            type: int
+            description: fstab pass field, the fsck order.
+          backup:
+            type: bool
+            default: true
+            description: Keep a backup of C(/etc/fstab) before changing it.
+          state:
+            type: str
+            choices: [mounted, present, unmounted, remounted, absent, absent_from_fstab, ephemeral]
+            default: mounted
+            description: V(mounted) mounts and adds the fstab entry, V(present) only adds the entry.
+          owner:
+            type: str
+            description: Owner of the mount point, set after mounting.
+          group:
+            type: str
+            description: Group of the mount point, set after mounting.
+          mode:
+            type: raw
+            description: Mode of the mount point, set after mounting.
+
+      # ── sysctl ────────────────────────────────────────────────────────────
+      linux_sysctl_file:
+        type: path
+        default: /etc/sysctl.d/99-ansible.conf
+        description: File that receives the settings.
+      linux_sysctl_reload:
+        type: bool
+        default: true
+        description: Apply the settings at runtime as well.
+      linux_sysctl:
+        type: dict
+        default: {}
+        description: sysctl settings, keyed by name, for example V(net.ipv4.ip_forward=1).
+      linux_sysctl_absent:
+        type: list
+        elements: str
+        default: []
+        description: sysctl keys to remove from O(linux_sysctl_file).
+
+      # ── ulimits ───────────────────────────────────────────────────────────
+      linux_limits_file:
+        type: path
+        default: /etc/security/limits.d/99-ansible.conf
+        description: File that receives O(linux_limits). The role manages all of it.
+      linux_limits:
+        type: list
+        elements: dict
+        default: []
+        description:
+          - PAM resource limits, which apply to login sessions only.
+          - Use O(linux_systemd_limits) for services started by systemd.
+        options:
+          domain:
+            type: str
+            required: true
+            description: Who the limit applies to, for example a user, V(@group) or V(*).
+          type:
+            type: str
+            choices: [soft, hard, "-"]
+            default: "-"
+            description: Limit type. V(-) sets both the soft and the hard limit.
+          item:
+            type: str
+            required: true
+            description: Resource to limit, for example V(nofile) or V(nproc).
+          value:
+            type: raw
+            required: true
+            description: The limit, for example V(65535) or V(unlimited).
+          comment:
+            type: str
+            description: Comment written above the entry.
+      linux_systemd_limits:
+        type: dict
+        default: {}
+        description:
+          - systemd default limits, for example V(DefaultLimitNOFILE=65535:65535).
+          - Written to drop-ins for C(system.conf) and C(user.conf).
