@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.2](https://github.com/shadowlordarholfromgothic2/ansible-role-linux/compare/1.0.1...1.0.2) (2026-10-03)
+
+
+### Documentation
+
+* put some details into changelog ([a0f571c](https://github.com/shadowlordarholfromgothic2/ansible-role-linux/commit/a0f571ce594d2645841519394ec2b6e0ff248523))
+* Put some details into changelog ([1fcdcea](https://github.com/shadowlordarholfromgothic2/ansible-role-linux/commit/1fcdceac277584837a7c527ab2d9b85fce6ac658))
+
 ## [1.0.1](https://github.com/shadowlordarholfromgothic2/ansible-role-linux/compare/1.0.0...1.0.1) (2026-10-03)
 
 
