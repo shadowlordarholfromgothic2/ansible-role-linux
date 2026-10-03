@@ -91,7 +91,9 @@ linux_sshd_max_auth_tries: 3
 linux_sshd_config_file: /etc/ssh/sshd_config.d/00-ansible.conf
 linux_sshd_package: openssh-server
 linux_sshd_path: /usr/sbin/sshd
-linux_sshd_service: "{{ 'ssh' if ansible_facts.os_family == 'Debian' else 'sshd' }}"
+# The argument validation (meta/argument_specs.yml) templates this before the
+# role gathers facts, hence the default().
+linux_sshd_service: "{{ 'ssh' if ansible_facts.os_family | default('') == 'Debian' else 'sshd' }}"
 
 # ── Additional repositories ─────────────────────────────────────────────────
 # Signing keys fetched into /etc/apt/keyrings. Use `dest` with a .gpg suffix for

@@ -31,6 +31,13 @@ Tags: `timezone`, `repositories`, `upgrade`, `packages`, `users`, `ssh`, `storag
 ansible-playbook linux.yml --tags users,packages
 ```
 
+Every variable is described in [meta/argument_specs.yml](meta/argument_specs.yml)
+(`ansible-doc -t role` shows them) and checked against it before the role runs:
+a wrong type, an unknown key in a list entry (say, a typo in a `linux_users`
+item) or a missing required key fails the play up front. The check templates
+the variables before the role gathers facts, so in a play with
+`gather_facts: false` they must not refer to `ansible_facts`.
+
 ## Users
 
 ```yaml
