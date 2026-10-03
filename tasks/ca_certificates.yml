@@ -1,0 +1,48 @@
+---
+# Checked on the controller before anything changes: update-ca-certificates
+# only warns about a file without a certificate in it and leaves it out.
+- name: Check that the CA certificates are PEM-encoded
+  ansible.builtin.assert:
+    that: _linux_ca_certificate is search('-----BEGIN CERTIFICATE-----\s+[A-Za-z0-9+/=\s]+-----END CERTIFICATE-----')
+    fail_msg: >-
+      The CA certificate '{{ item.name }}' is not PEM-encoded: its
+      {{ 'content' if item.content is defined else 'src file' }} has no
+      complete '-----BEGIN CERTIFICATE-----' ... '-----END CERTIFICATE-----' block.
+    quiet: true
+  loop: "{{ linux_ca_certificates }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: not (item.remove | default(false) | bool)
+
+- name: Ensure the CA certificates package is installed
+  ansible.builtin.package:
+    name: ca-certificates
+    state: present
+
+- name: Install the CA certificates
+  ansible.builtin.copy:
+    content: "{{ _linux_ca_certificate }}\n"
+    dest: "{{ _linux_ca_trust[ansible_facts.os_family].dir }}/{{ item.name }}.crt"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ linux_ca_certificates }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: not (item.remove | default(false) | bool)
+  notify: Update CA certificates
+
+- name: Remove the CA certificates that are no longer wanted
+  ansible.builtin.file:
+    path: "{{ _linux_ca_trust[ansible_facts.os_family].dir }}/{{ item.name }}.crt"
+    state: absent
+  loop: "{{ linux_ca_certificates }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.remove | default(false) | bool
+  notify: Update CA certificates
+
+# Not left to the end of the play: the repositories and packages that follow
+# may be served over HTTPS with a certificate one of these CAs issued.
+- name: Rebuild the CA trust store before the rest of the role uses it
+  ansible.builtin.meta: flush_handlers

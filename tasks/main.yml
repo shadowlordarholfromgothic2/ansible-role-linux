@@ -21,6 +21,15 @@
   when: linux_timezone | length > 0
   tags: [linux, timezone]
 
+# Before the repositories, which may be served with a certificate of these CAs.
+- name: Configure the trusted CA certificates
+  ansible.builtin.include_tasks:
+    file: ca_certificates.yml
+    apply:
+      tags: [linux, ca_certificates]
+  when: linux_ca_certificates | length > 0
+  tags: [linux, ca_certificates]
+
 - name: Configure additional package repositories
   ansible.builtin.include_tasks:
     file: repositories.yml

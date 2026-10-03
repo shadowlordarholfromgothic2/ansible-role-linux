@@ -22,6 +22,7 @@
           - openssh-server
           - sudo
           - tree            # removed again through linux_packages_absent
+          - openssl         # verify.yml checks the CA trust store with it
         state: present
 
     # Also creates the host keys on EL, and /run/sshd on Ubuntu: `sshd -t`,
@@ -70,6 +71,31 @@
         owner: root
         group: root
         mode: "0644"
+
+    # The second copy stays, for verify.yml to check the trust store against.
+    - name: Install a CA certificate that the role has to remove
+      ansible.builtin.copy:
+        src: molecule-old-ca.crt
+        dest: "{{ item }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - "{{ _molecule_ca_dir[ansible_facts.os_family] }}/molecule-old-ca.crt"
+        - /srv/molecule-old-ca.crt
+      vars:
+        _molecule_ca_dir:
+          Debian: /usr/local/share/ca-certificates
+          RedHat: /etc/pki/ca-trust/source/anchors
+
+    - name: Add it to the trust store
+      ansible.builtin.command: "{{ 'update-ca-certificates' if ansible_facts.os_family == 'Debian' else 'update-ca-trust extract' }}"
+      changed_when: true
+
+    # Otherwise the check that the role removed it proves nothing.
+    - name: Check that the CA certificate is trusted now
+      ansible.builtin.command: openssl verify /srv/molecule-old-ca.crt
+      changed_when: false
 
     - name: Leave a one-line apt source that the role has to remove
       ansible.builtin.copy:
