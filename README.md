@@ -145,10 +145,12 @@ linux_apt_install_recommends: false
 ```
 
 Keys are fetched into `/etc/apt/keyrings/<name>.asc`; for a binary (dearmored)
-key set `dest:` with a `.gpg` suffix. The apt cache is refreshed immediately
-after a repository change, so packages from the new repo can be installed in the
-same run. `python3-debian`, which `deb822_repository` needs, is installed
-automatically.
+key set `dest:` with a `.gpg` suffix. A key that is already present is left
+alone, without contacting the server; set `force: true` on the entry to fetch it
+again (e.g. after the vendor rotated it), and drop it once done. The apt cache
+is refreshed immediately after a repository change, so packages from the new
+repo can be installed in the same run. `python3-debian`, which
+`deb822_repository` needs, is installed automatically.
 
 In check mode a new repository is never really written, so its packages cannot
 be found yet. When a repository changed in the same run, "No package … available"

@@ -11,17 +11,29 @@
         mode: "0755"
       when: linux_apt_keys | length > 0
 
-    - name: Fetch the repository signing keys
-      ansible.builtin.get_url:
-        url: "{{ item.url }}"
-        dest: "{{ item.dest | default(linux_apt_keyring_dir ~ '/' ~ item.name ~ '.asc') }}"
-        owner: root
-        group: root
-        mode: "0644"
-        force: "{{ item.force | default(false) }}"
+    # Without a checksum get_url still contacts the server on every run, even
+    # with force=false, so keys already on disk are skipped here instead.
+    - name: Check which repository signing keys are already present
+      ansible.builtin.stat:
+        path: "{{ item.dest | default(linux_apt_keyring_dir ~ '/' ~ item.name ~ '.asc') }}"
+        get_checksum: false
       loop: "{{ linux_apt_keys }}"
       loop_control:
         label: "{{ item.name }}"
+      register: linux_apt_keys_stat
+
+    - name: Fetch the repository signing keys
+      ansible.builtin.get_url:
+        url: "{{ item.item.url }}"
+        dest: "{{ item.item.dest | default(linux_apt_keyring_dir ~ '/' ~ item.item.name ~ '.asc') }}"
+        owner: root
+        group: root
+        mode: "0644"
+        force: "{{ item.item.force | default(false) }}"
+      loop: "{{ linux_apt_keys_stat.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      when: not item.stat.exists or (item.item.force | default(false) | bool)
       register: linux_apt_keys_result
 
     # deb822_repository parses the .sources files with python3-debian.

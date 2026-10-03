@@ -96,9 +96,11 @@ linux_sshd_service: "{{ 'ssh' if ansible_facts.os_family == 'Debian' else 'sshd'
 # ── Additional repositories ─────────────────────────────────────────────────
 # Signing keys fetched into /etc/apt/keyrings. Use `dest` with a .gpg suffix for
 # binary (dearmored) keys; the default .asc suffix expects an armored key.
+# A key that is already on disk is not fetched again unless `force` is set.
 # - name: docker
 #   url: https://download.docker.com/linux/ubuntu/gpg
 #   dest: /etc/apt/keyrings/docker.asc   # optional
+#   force: false                         # optional — re-fetch on every run
 linux_apt_keyring_dir: /etc/apt/keyrings
 linux_apt_keys: []
 
