@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.0](https://github.com/shadowlordarholfromgothic2/ansible-role-linux/compare/1.0.2...1.1.0) (2026-10-03)
+
+
+### Features
+
+* add trusted ca certificates ([9cf92d4](https://github.com/shadowlordarholfromgothic2/ansible-role-linux/commit/9cf92d47294f4a6b1095cc5b94748f8574a863d1))
+* add trusted ca certificates ([ea9b349](https://github.com/shadowlordarholfromgothic2/ansible-role-linux/commit/ea9b349e14f07c6a93b0b16a83dfaf21df8eaa5f))
+
 ## [1.0.2](https://github.com/shadowlordarholfromgothic2/ansible-role-linux/compare/1.0.1...1.0.2) (2026-10-03)
 
 
