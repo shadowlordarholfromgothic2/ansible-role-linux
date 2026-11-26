@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.0](https://github.com/shadowlordarholfromgothic2/ansible-role-linux/compare/1.1.0...1.2.0) (2026-11-26)
+
+
+### Features
+
+* add ufw firewall setup ([f3f0cc7](https://github.com/shadowlordarholfromgothic2/ansible-role-linux/commit/f3f0cc777f4af5204a317333f62933e74d662784))
+* add ufw firewall setup ([4242428](https://github.com/shadowlordarholfromgothic2/ansible-role-linux/commit/42424288f8509558793d3ec9789cdf6f585ada96))
+
 ## [1.1.0](https://github.com/shadowlordarholfromgothic2/ansible-role-linux/compare/1.0.2...1.1.0) (2026-10-03)
 
 
