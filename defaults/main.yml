@@ -95,6 +95,44 @@ linux_sshd_path: /usr/sbin/sshd
 # role gathers facts, hence the default().
 linux_sshd_service: "{{ 'ssh' if ansible_facts.os_family | default('') == 'Debian' else 'sshd' }}"
 
+# ── Firewall (UFW) ──────────────────────────────────────────────────────────
+# Ubuntu only: with this set the role fails on any other distribution. false
+# leaves UFW alone, it does not disable a firewall that is already running.
+linux_ufw_enabled: false
+# allow | deny | reject
+linux_ufw_default_incoming: deny
+linux_ufw_default_outgoing: allow
+linux_ufw_default_routed: deny
+
+# Rules are added in this order. Dropping an entry from the list leaves its
+# rule in place; mark it `remove: true` instead.
+# - port: 22                    # optional: 22, a range "8000:8100" or a list "80,443"
+#   proto: tcp                  # optional: tcp | udp | any | ... (needed for a range or list)
+#   from: 192.168.1.0/24        # optional, default any
+#   to: any                     # optional, default any
+#   rule: allow                 # optional: allow | deny | reject | limit
+#   direction: in               # optional: in | out
+#   interface: eth0             # optional
+#   comment: SSH from LAN       # optional, no apostrophes
+#   remove: false               # optional — delete the rule instead
+linux_ufw_rules: []
+
+# Fail before enabling UFW when no rule allows the port Ansible connects to
+# (ansible_port, 22 by default) — the next run would be locked out.
+linux_ufw_check_ssh_rule: true
+
+# Docker publishes container ports past UFW, through the FORWARD chain. Rules
+# for its DOCKER-USER chain, which Docker evaluates first, are kept in
+# /etc/ufw/after.rules (IPv4) and after6.rules (IPv6) and loaded with UFW.
+# Each `rule` is an iptables rule spec, appended to the chain in this order.
+# An empty list removes the block and flushes the chain.
+# - rule: "-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN"
+#   comment: replies to connections the containers opened     # optional
+# - rule: "-s 192.168.1.0/24 -j RETURN"
+# - rule: "-i eth0 -j DROP"
+linux_ufw_docker_user_rules: []
+linux_ufw_docker_user_rules_ipv6: []
+
 # ── CA certificates ─────────────────────────────────────────────────────────
 # Extra certificate authorities for the system trust store, one PEM certificate
 # per entry, installed as <name>.crt into /usr/local/share/ca-certificates

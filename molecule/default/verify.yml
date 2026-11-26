@@ -234,6 +234,137 @@
       vars:
         _sshd: "{{ 'ssh' if ansible_facts.os_family == 'Debian' else 'sshd' }}"
 
+    # ── Firewall ────────────────────────────────────────────────────────────
+    - name: Check the firewall
+      when: ansible_facts.distribution == 'Ubuntu'
+      block:
+        - name: Read the UFW status
+          ansible.builtin.command: ufw status verbose
+          register: verify_ufw
+          changed_when: false
+
+        - name: Read the UFW configuration files
+          ansible.builtin.slurp:
+            src: "/etc/ufw/{{ item }}"
+          loop: [ufw.conf, after6.rules]
+          register: verify_ufw_files
+
+        - name: Read the DOCKER-USER chains
+          ansible.builtin.command: "{{ item }} -S DOCKER-USER"
+          loop: [iptables, ip6tables]
+          register: verify_docker_user
+          changed_when: false
+
+        - name: Assert UFW is active and starts at boot, with the declared policies and rules
+          ansible.builtin.assert:
+            that:
+              - "'Status: active' in verify_ufw.stdout_lines"
+              - _files['ufw.conf'] is search('^ENABLED=yes$', multiline=true)
+              - "'Default: deny (incoming), allow (outgoing), deny (routed)' in verify_ufw.stdout"
+              - verify_ufw.stdout is search('^22/tcp +ALLOW IN +192\.168\.1\.0/24 +# SSH from LAN$', multiline=true)
+              - verify_ufw.stdout is search('^9100/tcp +ALLOW IN +192\.168\.1\.10 ', multiline=true)
+              - verify_ufw.stdout is search('^443/tcp \(v6\) +ALLOW IN +Anywhere \(v6\) ', multiline=true)
+              - verify_ufw.stdout is search('^60000:61000/udp +ALLOW IN +Anywhere ', multiline=true)
+              # remove: true, although the rule has a comment and the entry none.
+              - "'8080' not in verify_ufw.stdout"
+            quiet: true
+          vars:
+            _files: >-
+              {{ dict(verify_ufw_files.results | map(attribute='item')
+                      | zip(verify_ufw_files.results | map(attribute='content') | map('b64decode'))) }}
+
+        - name: Assert DOCKER-USER holds the IPv4 rules, in order, and the stale IPv6 ones are gone
+          ansible.builtin.assert:
+            that:
+              - >-
+                verify_docker_user.results[0].stdout_lines == [
+                  '-N DOCKER-USER',
+                  '-A DOCKER-USER -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN',
+                  '-A DOCKER-USER -s 192.168.1.0/24 -j RETURN',
+                  '-A DOCKER-USER -p tcp -m conntrack --ctorigdstport 443 --ctdir ORIGINAL -j RETURN',
+                  '-A DOCKER-USER -i eth0 -j DROP']
+              - verify_docker_user.results[1].stdout_lines == ['-N DOCKER-USER']
+              - "'DOCKER-USER' not in _after6_rules"
+            quiet: true
+          vars:
+            _after6_rules: "{{ verify_ufw_files.results[1].content | b64decode }}"
+
+    - name: Enable UFW on a distribution other than Ubuntu
+      when: ansible_facts.distribution != 'Ubuntu'
+      block:
+        - name: Run the role with UFW enabled
+          ansible.builtin.include_role:
+            name: homelab.linux
+          vars:
+            linux_ufw_enabled: true
+
+        - name: Fail, the role went on
+          ansible.builtin.fail:
+            msg: The role enabled UFW on {{ ansible_facts.distribution }}.
+      rescue:
+        - name: Assert the role stopped at the distribution check
+          ansible.builtin.assert:
+            that: "'only supported on Ubuntu' in ansible_failed_result.msg"
+            quiet: true
+
+    # Port 22 only for udp, in a removed rule, and not in a list of ports.
+    - name: Enable UFW without a rule that lets Ansible in
+      when: ansible_facts.distribution == 'Ubuntu'
+      block:
+        - name: Run the role without a rule for tcp port 22
+          ansible.builtin.include_role:
+            name: homelab.linux
+          vars:
+            linux_ufw_enabled: true
+            linux_ufw_rules:
+              - {port: 22, proto: udp}
+              - {port: 22, proto: tcp, remove: true}
+              - {port: "80,443", proto: tcp}
+
+        - name: Fail, the role went on
+          ansible.builtin.fail:
+            msg: The role enabled UFW without a rule for the SSH port.
+      rescue:
+        - name: Assert the role stopped at the SSH rule check
+          ansible.builtin.assert:
+            that: "'UFW would lock it out' in ansible_failed_result.msg"
+            quiet: true
+
+    # --dport without -p: iptables-restore --test catches it before the file is
+    # installed, which keeps `ufw reload` from failing half-way.
+    - name: Add a DOCKER-USER rule that iptables does not accept
+      when: ansible_facts.distribution == 'Ubuntu'
+      block:
+        - name: Run the role with the broken rule
+          ansible.builtin.include_role:
+            name: homelab.linux
+          vars:
+            linux_ufw_enabled: true
+            linux_ufw_check_ssh_rule: false
+            linux_ufw_docker_user_rules:
+              - rule: -s 192.168.1.0/24 --dport 80 -j RETURN
+
+        - name: Fail, the role went on
+          ansible.builtin.fail:
+            msg: The role installed a DOCKER-USER rule that iptables does not accept.
+      rescue:
+        - name: Read the UFW after-rules
+          ansible.builtin.slurp:
+            src: /etc/ufw/after.rules
+          register: verify_after_rules
+
+        - name: Assert the rule was refused and the after-rules left as they were
+          ansible.builtin.assert:
+            that:
+              - >-
+                ansible_failed_result.results | map(attribute='msg', default='')
+                | select('search', 'failed to validate') | list | length == 1
+              - "'--dport 80' not in _after_rules"
+              - "'-A DOCKER-USER -i eth0 -j DROP' in _after_rules"
+            quiet: true
+          vars:
+            _after_rules: "{{ verify_after_rules.content | b64decode }}"
+
     # ── Storage ─────────────────────────────────────────────────────────────
     - name: Read the filesystem type of the disk image
       ansible.builtin.command: blkid -o value -s TYPE /srv/molecule-disk.img

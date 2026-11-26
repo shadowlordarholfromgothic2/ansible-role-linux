@@ -1,8 +1,8 @@
 # `linux` role
 
-Basic setup of Linux VMs: users, SSH server settings, timezone, trusted CA certificates,
-packages (incl. extra repositories), package upgrades, disk partitions / LVM / filesystems / mounts, sysctl settings
-and ulimits.
+Basic setup of Linux VMs: users, SSH server settings, the UFW firewall (Ubuntu), timezone,
+trusted CA certificates, packages (incl. extra repositories), package upgrades, disk partitions / LVM / filesystems /
+mounts, sysctl settings and ulimits.
 
 Everything is opt-in — with the defaults the role changes nothing, so you can
 enable one feature at a time per host or group.
@@ -13,6 +13,7 @@ enable one feature at a time per host or group.
 * Collections: `community.general`, `ansible.posix` — `ansible-galaxy install -r requirements.yml`
 * Debian/Ubuntu or RedHat-family targets; the role asserts this up front.
   Repository management is implemented per family (deb822/one-line vs. yum).
+  The firewall is Ubuntu only.
 * `become: true` — the role configures system state throughout.
 
 ## Usage
@@ -25,7 +26,7 @@ enable one feature at a time per host or group.
 ```
 
 Tags: `timezone`, `ca_certificates`, `repositories`, `upgrade`, `packages`, `users`,
-`ssh`, `storage`, `sysctl`, `limits` — plus `linux` for all of them.
+`ssh`, `ufw`, `storage`, `sysctl`, `limits` — plus `linux` for all of them.
 
 ```bash
 ansible-playbook linux.yml --tags users,packages
@@ -121,6 +122,87 @@ effect — it fails if something earlier in the config overrides them.
 `openssh-server` is installed if it is missing. With the defaults, password and
 root logins stop working: make sure the account Ansible connects as has a key
 (see `ssh_keys` under [Users](#users), which runs first) before enabling this.
+
+## Firewall (UFW)
+
+Ubuntu only: with `linux_ufw_enabled: true` the role fails on any other
+distribution, before it changes anything. With the default `false` it leaves
+UFW alone — it does not disable a firewall that is already running.
+
+```yaml
+# host_vars/nas01.yml
+linux_ufw_enabled: true
+linux_ufw_rules:
+  - {port: 22,   proto: tcp, from: 192.168.1.0/24, comment: SSH from LAN}
+  - {port: 9100, proto: tcp, from: 192.168.1.10,   comment: node_exporter for Prometheus}
+  - {port: 443,  proto: tcp, comment: HTTPS from anywhere}
+  - {port: 8080, proto: tcp, from: 192.168.1.50, remove: true}  # drop an old rule
+
+# defaults
+linux_ufw_default_incoming: deny    # allow | deny | reject
+linux_ufw_default_outgoing: allow
+linux_ufw_default_routed: deny
+```
+
+A rule entry also takes `to`, `rule` (`allow`, `deny`, `reject` or `limit`),
+`direction` and `interface`; see [meta/argument_specs.yml](meta/argument_specs.yml).
+`port` may be a range (`"8000:8100"`) or a list (`"80,443"`), which then need
+`proto`. Without `from` a rule covers IPv4 and IPv6.
+
+The role does not prune rules it is not told about: dropping an entry from the
+list leaves its rule in UFW, so set `remove: true` instead. The comment is not passed along when a rule
+is removed, since UFW would only delete a rule with exactly that comment.
+
+The rules and policies are applied first, then UFW is enabled, which keeps open
+connections alive. Before that the role checks that a rule allows the tcp port
+Ansible connects to (`ansible_port`, 22 by default), as UFW would otherwise lock
+the next run out. It only checks the port, not that `from` covers the
+controller. Set `linux_ufw_check_ssh_rule: false` when Ansible gets in some
+other way.
+
+UFW applies `/etc/ufw/sysctl.conf` whenever it starts, which wins over
+[sysctl](#sysctl) settings for the same keys (`accept_redirects`,
+`log_martians`, …).
+
+### Docker and the DOCKER-USER chain
+
+Docker publishes container ports through the `FORWARD` chain, ahead of UFW, so
+UFW rules do not apply to them. The chain Docker evaluates first is
+`DOCKER-USER`; its rules go to a managed block in `/etc/ufw/after.rules` and
+are loaded together with UFW:
+
+```yaml
+linux_ufw_docker_user_rules:
+  - rule: -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN
+    comment: replies to connections the containers opened
+  - rule: -s 192.168.1.0/24 -j RETURN
+    comment: the LAN reaches every published port
+  - rule: -p tcp -m conntrack --ctorigdstport 443 --ctdir ORIGINAL -j RETURN
+    comment: HTTPS from anywhere
+  - rule: -i eth0 -j DROP
+    comment: nothing else from outside
+```
+
+Each `rule` is an iptables rule spec, appended to `DOCKER-USER` in the order of
+the list (the role writes the `-A DOCKER-USER`). `RETURN` hands the packet back
+to Docker, which accepts it; anything that falls through the list goes back to
+Docker as well, so finish with a `DROP` for the traffic you want to keep out. The
+connections the containers open themselves come back through this chain too,
+hence the first rule. Docker translates the destination before the chain, so
+`--dport` matches the port inside the container — match the published port
+with `-m conntrack --ctorigdstport`, as above.
+
+The block declares the chain, which empties it whenever UFW starts or reloads:
+the chain holds exactly these rules, also after Docker restarts. Before the
+file is installed it is checked with `iptables-restore --test` — a file that
+does not load makes `ufw reload` stop half-way and mark UFW disabled. The test
+cannot see whether a chain a rule jumps to exists; such a rule fails at the
+reload. UFW is reloaded whenever the block changes.
+
+`linux_ufw_docker_user_rules_ipv6` does the same for IPv6, in
+`/etc/ufw/after6.rules`. An empty list removes its block and flushes the chain.
+Docker's nftables firewall backend has no `DOCKER-USER` chain; this needs the
+default iptables one.
 
 ## Timezone
 

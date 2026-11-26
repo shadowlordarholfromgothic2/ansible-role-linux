@@ -1,0 +1,9 @@
+*filter
+:DOCKER-USER - [0:0]
+{% for rule in item.rules %}
+{% if rule.comment is defined %}
+# {{ rule.comment }}
+{% endif %}
+-A DOCKER-USER {{ rule.rule | trim }}
+{% endfor %}
+COMMIT
