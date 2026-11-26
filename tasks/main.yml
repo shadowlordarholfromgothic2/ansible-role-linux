@@ -13,6 +13,18 @@
     quiet: true
   tags: [always]
 
+# Up front, so that the play stops before the role changes anything. Ubuntu's
+# os_family is Debian, hence the distribution.
+- name: Assert that UFW is only enabled on Ubuntu
+  ansible.builtin.assert:
+    that: ansible_facts.distribution == 'Ubuntu'
+    fail_msg: >-
+      linux_ufw_enabled is only supported on Ubuntu hosts, this one runs
+      {{ ansible_facts.distribution }} (os_family '{{ ansible_facts.os_family }}').
+    quiet: true
+  when: linux_ufw_enabled | bool
+  tags: [always]
+
 - name: Configure the timezone
   ansible.builtin.include_tasks:
     file: timezone.yml
@@ -70,6 +82,14 @@
       tags: [linux, ssh]
   when: linux_sshd_configure | bool
   tags: [linux, ssh]
+
+- name: Configure the UFW firewall
+  ansible.builtin.include_tasks:
+    file: ufw.yml
+    apply:
+      tags: [linux, ufw]
+  when: linux_ufw_enabled | bool
+  tags: [linux, ufw]
 
 - name: Configure storage
   ansible.builtin.include_tasks:

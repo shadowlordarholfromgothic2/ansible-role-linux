@@ -1,0 +1,149 @@
+---
+# Checked on the controller before anything changes. The ufw module hands the
+# comment to ufw in single quotes, which an apostrophe would end early.
+- name: Check the UFW rule comments
+  ansible.builtin.assert:
+    that: item.comment is not search("'")
+    fail_msg: >-
+      The comment of the UFW rule for port {{ item.port | default('any') }}
+      must not contain an apostrophe: {{ item.comment }}
+    quiet: true
+  loop: "{{ linux_ufw_rules | selectattr('comment', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.comment }}"
+
+# The role writes "-A DOCKER-USER" itself, and a line break would let the rest
+# of a rule land in another chain.
+- name: Check the DOCKER-USER rules
+  ansible.builtin.assert:
+    that:
+      - item.rule is not search('\n')
+      - item.rule is not match('\s*-(A|I|-append|-insert)\s')
+      - item.comment | default('') is not search('\n')
+    fail_msg: >-
+      The DOCKER-USER rule '{{ item.rule }}' and its comment must be single
+      lines, and the rule must not start with '-A DOCKER-USER': the role adds that.
+    quiet: true
+  loop: "{{ linux_ufw_docker_user_rules + linux_ufw_docker_user_rules_ipv6 }}"
+  loop_control:
+    label: "{{ item.rule }}"
+
+# Once UFW is enabled, a connection that no rule allows is dropped, and that
+# includes the next run of Ansible. Only the port is checked, not whether the
+# rule's `from` covers the controller.
+- name: Check that a rule lets Ansible connect over SSH
+  ansible.builtin.assert:
+    that: _linux_ufw_ssh_allowed | bool
+    fail_msg: >-
+      No rule in linux_ufw_rules allows incoming tcp port {{ _linux_ufw_ssh_port }},
+      which Ansible connects to: with the default incoming policy
+      '{{ linux_ufw_default_incoming }}', UFW would lock it out. Add a rule for it,
+      or set linux_ufw_check_ssh_rule to false if Ansible gets in another way.
+    quiet: true
+  when:
+    - linux_ufw_check_ssh_rule | bool
+    - linux_ufw_default_incoming != 'allow'
+
+- name: Ensure UFW is installed
+  ansible.builtin.package:
+    name: ufw
+    state: present
+  register: linux_ufw_package_result
+
+# In check mode a UFW that is not installed yet stays missing, and so do the
+# commands the tasks below need.
+- name: Configure UFW
+  when: not (ansible_check_mode and linux_ufw_package_result is changed)
+  block:
+    - name: Configure the UFW rules
+      community.general.ufw:
+        rule: "{{ item.rule | default('allow') }}"
+        to_port: "{{ item.port | string if item.port is defined else omit }}"
+        proto: "{{ item.proto | default(omit) }}"
+        from_ip: "{{ item.from | default('any') }}"
+        to_ip: "{{ item.to | default('any') }}"
+        direction: "{{ item.direction | default('in' if item.interface is defined else omit) }}"
+        interface: "{{ item.interface | default(omit) }}"
+        # ufw deletes a rule whatever its comment, unless one is given: then
+        # only a rule with that very comment.
+        comment: "{{ omit if _linux_ufw_remove else item.comment | default(omit) }}"
+        delete: "{{ _linux_ufw_remove }}"
+      loop: "{{ linux_ufw_rules }}"
+      loop_control:
+        label: >-
+          {{ 'remove ' if _linux_ufw_remove else '' }}{{ item.rule | default('allow') }}
+          {{ item.port | default('any') }}/{{ item.proto | default('any') }}
+          from {{ item.from | default('any') }}
+      vars:
+        _linux_ufw_remove: "{{ item.remove | default(false) | bool }}"
+
+    - name: Set the UFW default policies
+      community.general.ufw:
+        default: "{{ item.policy }}"
+        direction: "{{ item.direction }}"
+      loop:
+        - {direction: incoming, policy: "{{ linux_ufw_default_incoming }}"}
+        - {direction: outgoing, policy: "{{ linux_ufw_default_outgoing }}"}
+        - {direction: routed, policy: "{{ linux_ufw_default_routed }}"}
+      loop_control:
+        label: "{{ item.direction }}: {{ item.policy }}"
+
+    # Whether UFW starts at boot, before it is enabled below.
+    - name: Read the UFW configuration
+      ansible.builtin.slurp:
+        src: /etc/ufw/ufw.conf
+      register: linux_ufw_conf
+
+    # Declaring a chain in an iptables-restore file empties it, so every UFW
+    # start or reload replaces the contents of DOCKER-USER with these rules.
+    # A file that does not load makes `ufw reload` stop half-way, hence the
+    # check with iptables-restore before the file is installed.
+    - name: Write the DOCKER-USER rules to the UFW after-rules
+      ansible.builtin.blockinfile:
+        path: "{{ item.file }}"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK: DOCKER-USER rules"
+        block: "{{ lookup('ansible.builtin.template', 'ufw-docker-user.rules.j2') }}"
+        state: "{{ 'present' if item.rules | length > 0 else 'absent' }}"
+        validate: "{{ item.command }}-restore --test --noflush %s"
+      loop: "{{ _linux_ufw_after_rules }}"
+      loop_control:
+        label: "{{ item.file }}"
+      register: linux_ufw_docker_user_result
+
+    - name: Enable UFW
+      community.general.ufw:
+        state: enabled
+
+    # `ufw enable` leaves a running firewall as it is, so changed after-rules
+    # need a reload. So does a UFW that a failed reload left half-loaded: that
+    # also marks it disabled, and enabling it again only clears the mark.
+    - name: Reload UFW to load the DOCKER-USER rules
+      community.general.ufw:
+        state: reloaded
+      when: >-
+        linux_ufw_docker_user_result is changed
+        or linux_ufw_conf.content | b64decode is not search('^ENABLED=yes$', multiline=true)
+
+    # Without its block UFW leaves the chain alone, so the rules would stay
+    # loaded until the next boot.
+    - name: Flush the DOCKER-USER rules the role no longer manages
+      ansible.builtin.command: "{{ item.item.command }} -w -F DOCKER-USER"
+      loop: "{{ linux_ufw_docker_user_result.results }}"
+      loop_control:
+        label: "{{ item.item.command }}"
+      when:
+        - not ansible_check_mode
+        - item is changed
+        - item.item.rules | length == 0
+      register: linux_ufw_flush_result
+      changed_when: linux_ufw_flush_result.rc == 0
+      failed_when:
+        - linux_ufw_flush_result.rc != 0
+        - linux_ufw_flush_result.stderr is not search('No chain')
+
+- name: Report what check mode could not check
+  ansible.builtin.debug:
+    msg: >-
+      UFW is not installed yet, so check mode cannot tell what its rules,
+      default policies and DOCKER-USER rules would change.
+  when: ansible_check_mode and linux_ufw_package_result is changed

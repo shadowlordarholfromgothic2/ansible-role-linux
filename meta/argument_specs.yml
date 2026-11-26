@@ -10,12 +10,12 @@ argument_specs:
   main:
     short_description: Basic setup of Linux VMs
     description:
-      - Configures users and groups, the SSH server, the timezone, trusted CA
-        certificates, packages and extra repositories, package upgrades,
-        partitions, LVM, filesystems and mounts, sysctl settings and resource
-        limits.
+      - Configures users and groups, the SSH server, the UFW firewall, the
+        timezone, trusted CA certificates, packages and extra repositories,
+        package upgrades, partitions, LVM, filesystems and mounts, sysctl
+        settings and resource limits.
       - Every feature is opt-in. With the defaults the role changes nothing.
-      - Supports Debian- and RedHat-family hosts.
+      - Supports Debian- and RedHat-family hosts. The firewall is Ubuntu only.
     author:
       - kirgo
     options:
@@ -281,6 +281,134 @@ argument_specs:
         description:
           - Name of the SSH server service, reloaded after a change.
           - Defaults to V(ssh) on Debian-family hosts and V(sshd) elsewhere.
+
+      # ── Firewall (UFW) ────────────────────────────────────────────────────
+      linux_ufw_enabled:
+        type: bool
+        default: false
+        description:
+          - Install and enable UFW and configure it with the options below.
+          - Ubuntu only. The role fails on any other distribution when this is set.
+          - V(false) leaves UFW alone. It does not disable a firewall that is running.
+      linux_ufw_default_incoming:
+        type: str
+        default: deny
+        choices: [allow, deny, reject]
+        description: Policy for incoming connections that no rule matches.
+      linux_ufw_default_outgoing:
+        type: str
+        default: allow
+        choices: [allow, deny, reject]
+        description: Policy for outgoing connections that no rule matches.
+      linux_ufw_default_routed:
+        type: str
+        default: deny
+        choices: [allow, deny, reject]
+        description:
+          - Policy for routed (forwarded) traffic that no rule matches.
+          - Docker accepts the traffic to its containers before UFW sees it.
+            Use O(linux_ufw_docker_user_rules) to filter that.
+      linux_ufw_rules:
+        type: list
+        elements: dict
+        default: []
+        description:
+          - UFW rules, added in this order. The options are passed to
+            M(community.general.ufw).
+          - An entry dropped from the list leaves its rule in place. Set
+            O(linux_ufw_rules[].remove) to delete it.
+        options:
+          port:
+            type: raw
+            description:
+              - Destination port, a range like V(8000:8100) or a list like V(80,443).
+              - A range or a list needs O(linux_ufw_rules[].proto).
+              - Without it the rule covers every port.
+          proto:
+            type: str
+            choices: [any, tcp, udp, ipv6, esp, ah, gre, igmp, vrrp]
+            description: Protocol. Without it the rule covers every protocol.
+          from:
+            type: str
+            default: any
+            description: Source address or network, for example V(192.168.1.0/24).
+          to:
+            type: str
+            default: any
+            description: Destination address or network.
+          rule:
+            type: str
+            default: allow
+            choices: [allow, deny, reject, limit]
+            description: What to do with a matching connection. V(limit) rate-limits it.
+          direction:
+            type: str
+            choices: [in, out]
+            description:
+              - Direction of the traffic. UFW defaults to V(in).
+              - Defaults to V(in) as well when O(linux_ufw_rules[].interface) is set.
+          interface:
+            type: str
+            description: Network interface the rule applies to.
+          comment:
+            type: str
+            description:
+              - Comment shown by C(ufw status). It must not contain an apostrophe.
+              - Not used to delete a rule. UFW finds it without one.
+          remove:
+            type: bool
+            default: false
+            description: Delete the rule instead of adding it.
+      linux_ufw_check_ssh_rule:
+        type: bool
+        default: true
+        description:
+          - Fail before UFW is enabled when no rule in O(linux_ufw_rules)
+            allows incoming tcp connections to the port Ansible connects to
+            (C(ansible_port), V(22) by default).
+          - Only the port is checked, not whether the source of the rule covers
+            the controller.
+          - Not checked with O(linux_ufw_default_incoming=allow).
+      linux_ufw_docker_user_rules:
+        type: list
+        elements: dict
+        default: []
+        description:
+          - IPv4 rules for Docker's C(DOCKER-USER) chain, which filters the
+            traffic to published container ports before Docker accepts it,
+            and which UFW rules do not reach.
+          - Kept in a block in C(/etc/ufw/after.rules) and loaded with UFW,
+            which replaces the contents of the chain with them. The file is
+            checked with C(iptables-restore --test) before it is installed.
+          - An empty list removes the block and flushes the chain.
+        options:
+          rule:
+            type: str
+            required: true
+            description:
+              - An iptables rule spec, appended to the chain, for example
+                V(-s 192.168.1.0/24 -j RETURN). Without the leading C(-A DOCKER-USER).
+              - Docker translates the destination before this chain, so
+                C(--dport) matches the container port. Match the published
+                port with C(-m conntrack --ctorigdstport).
+          comment:
+            type: str
+            description: Comment written above the rule.
+      linux_ufw_docker_user_rules_ipv6:
+        type: list
+        elements: dict
+        default: []
+        description:
+          - IPv6 rules for the C(DOCKER-USER) chain, kept in
+            C(/etc/ufw/after6.rules). Otherwise like O(linux_ufw_docker_user_rules).
+        options:
+          rule:
+            type: str
+            required: true
+            description: An ip6tables rule spec, appended to the chain.
+          comment:
+            type: str
+            description: Comment written above the rule.
 
       # ── CA certificates ───────────────────────────────────────────────────
       linux_ca_certificates:

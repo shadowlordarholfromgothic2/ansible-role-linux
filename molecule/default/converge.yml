@@ -93,6 +93,23 @@
     linux_sshd_permit_root_login: prohibit-password
     linux_sshd_max_auth_tries: 4
 
+    # ── Firewall: Ubuntu only, verify.yml checks that the others refuse it ─
+    linux_ufw_enabled: "{{ ansible_facts.distribution == 'Ubuntu' }}"
+    linux_ufw_rules:
+      - {port: 22, proto: tcp, from: 192.168.1.0/24, comment: SSH from LAN}
+      - {port: 9100, proto: tcp, from: 192.168.1.10, comment: node_exporter for Prometheus}
+      - {port: 443, proto: tcp, comment: HTTPS from anywhere}
+      - {port: "60000:61000", proto: udp, comment: mosh}
+      # Added by prepare.yml, with a comment.
+      - {port: 8080, proto: tcp, from: 192.168.1.50, remove: true}
+    linux_ufw_docker_user_rules:
+      - {rule: "-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN", comment: replies to connections the containers opened}
+      - {rule: "-s 192.168.1.0/24 -j RETURN", comment: the LAN reaches every published port}
+      - {rule: "-p tcp -m conntrack --ctorigdstport 443 --ctdir ORIGINAL -j RETURN"}
+      - {rule: "-i eth0 -j DROP", comment: nothing else from outside}
+    # prepare.yml left IPv6 rules behind, which have to go.
+    linux_ufw_docker_user_rules_ipv6: []
+
     # ── Storage ─────────────────────────────────────────────────────────────
     # lvm2 is left out of the tooling: its services would scan the host's
     # block devices, which a privileged container sees.

@@ -97,6 +97,42 @@
       ansible.builtin.command: openssl verify /srv/molecule-old-ca.crt
       changed_when: false
 
+    # Ubuntu ships UFW, installed but inactive.
+    - name: Leave UFW leftovers that the role has to clean up
+      when: ansible_facts.distribution == 'Ubuntu'
+      block:
+        - name: Install UFW
+          ansible.builtin.package:
+            name: ufw
+            state: present
+
+        # With a comment, which the rule in converge.yml leaves out.
+        - name: Add a UFW rule that the role has to remove
+          community.general.ufw:
+            rule: allow
+            proto: tcp
+            from_ip: 192.168.1.50
+            to_port: "8080"
+            comment: added by hand
+
+        - name: Leave IPv6 DOCKER-USER rules the way an earlier run would have
+          ansible.builtin.blockinfile:
+            path: /etc/ufw/after6.rules
+            marker: "# {mark} ANSIBLE MANAGED BLOCK: DOCKER-USER rules"
+            block: &molecule_stale_docker_user |
+              *filter
+              :DOCKER-USER - [0:0]
+              -A DOCKER-USER -j DROP
+              COMMIT
+
+        # Loaded by hand, since UFW is not running: the role has to empty the
+        # chain itself once it removed the block.
+        - name: Load them
+          ansible.builtin.command:
+            cmd: ip6tables-restore --noflush
+            stdin: *molecule_stale_docker_user
+          changed_when: true
+
     - name: Leave a one-line apt source that the role has to remove
       ansible.builtin.copy:
         content: "# written by an earlier run\n"

@@ -32,6 +32,39 @@ _linux_sshd_settings:
   PermitRootLogin: "{{ linux_sshd_permit_root_login }}"
   MaxAuthTries: "{{ linux_sshd_max_auth_tries }}"
 
+# The port Ansible connects to over SSH.
+_linux_ufw_ssh_port: "{{ ansible_port | default(22) | int }}"
+
+# Whether linux_ufw_rules lets that port in: an incoming allow or limit rule
+# for tcp (or every protocol) whose port, range or list of ports holds it, or
+# that names no port at all. Where the rule allows connections from is not
+# checked.
+_linux_ufw_ssh_allowed: >-
+  {%- set ns = namespace(found=false) -%}
+  {%- for r in linux_ufw_rules
+        if not (r.remove | default(false) | bool)
+        and r.rule | default('allow') in ['allow', 'limit']
+        and r.direction | default('in') == 'in'
+        and r.proto | default('tcp') in ['any', 'tcp'] -%}
+    {%- for p in (r.port | default('1:65535') | string).split(',') -%}
+      {%- set bounds = p.split(':') | map('int') | list -%}
+      {%- if bounds[0] <= (_linux_ufw_ssh_port | int) <= bounds[-1] -%}
+        {%- set ns.found = true -%}
+      {%- endif -%}
+    {%- endfor -%}
+  {%- endfor -%}
+  {{ ns.found }}
+
+# The DOCKER-USER rules of each IP version, with the UFW file that holds them
+# and the iptables command that loads them.
+_linux_ufw_after_rules:
+  - file: /etc/ufw/after.rules
+    command: iptables
+    rules: "{{ linux_ufw_docker_user_rules }}"
+  - file: /etc/ufw/after6.rules
+    command: ip6tables
+    rules: "{{ linux_ufw_docker_user_rules_ipv6 }}"
+
 # Where each family looks for local CA certificates, and the command that
 # rebuilds the trust store from them. Without --fresh, update-ca-certificates
 # leaves the /etc/ssl/certs links of a removed certificate behind.
