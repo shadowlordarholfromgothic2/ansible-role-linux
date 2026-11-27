@@ -72,6 +72,21 @@
         group: root
         mode: "0644"
 
+    # Docker bind-mounts /etc/hosts into the container, which only
+    # unsafe_writes can change.
+    - name: Add an /etc/hosts line that the role has to leave alone
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: 192.168.1.98 kept.molecule.test
+        unsafe_writes: true
+
+    - name: Leave an /etc/hosts block the way an earlier run would have
+      ansible.builtin.blockinfile:
+        path: /etc/hosts
+        marker: "# {mark} ANSIBLE MANAGED BLOCK: linux_hosts"
+        block: 192.168.1.99    old.molecule.test
+        unsafe_writes: true
+
     # The second copy stays, for verify.yml to check the trust store against.
     - name: Install a CA certificate that the role has to remove
       ansible.builtin.copy:

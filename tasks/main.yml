@@ -33,6 +33,15 @@
   when: linux_timezone | length > 0
   tags: [linux, timezone]
 
+# Before the repositories, whose servers may only be known by a name from here.
+# Not skipped for an empty list, which removes the entries of an earlier run.
+- name: Configure /etc/hosts
+  ansible.builtin.include_tasks:
+    file: hosts.yml
+    apply:
+      tags: [linux, hosts]
+  tags: [linux, hosts]
+
 # Before the repositories, which may be served with a certificate of these CAs.
 - name: Configure the trusted CA certificates
   ansible.builtin.include_tasks:
