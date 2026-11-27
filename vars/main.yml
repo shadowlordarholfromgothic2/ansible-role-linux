@@ -65,6 +65,12 @@ _linux_ufw_after_rules:
     command: ip6tables
     rules: "{{ linux_ufw_docker_user_rules_ipv6 }}"
 
+# What linux_hosts accepts as an address: a dotted-quad IPv4 address, or
+# anything made of hex digits, colons and dots with at least one colon in it.
+# The latter is loose, but tells an IPv6 address from a host name.
+_linux_hosts_ip_pattern: >-
+  ((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])|[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*
+
 # Where each family looks for local CA certificates, and the command that
 # rebuilds the trust store from them. Without --fresh, update-ca-certificates
 # leaves the /etc/ssl/certs links of a removed certificate behind.

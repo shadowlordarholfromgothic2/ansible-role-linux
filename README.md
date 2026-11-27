@@ -1,8 +1,8 @@
 # `linux` role
 
 Basic setup of Linux VMs: users, SSH server settings, the UFW firewall (Ubuntu), timezone,
-trusted CA certificates, packages (incl. extra repositories), package upgrades, disk partitions / LVM / filesystems /
-mounts, sysctl settings and ulimits.
+`/etc/hosts` entries, trusted CA certificates, packages (incl. extra repositories), package
+upgrades, disk partitions / LVM / filesystems / mounts, sysctl settings and ulimits.
 
 Everything is opt-in — with the defaults the role changes nothing, so you can
 enable one feature at a time per host or group.
@@ -25,7 +25,7 @@ enable one feature at a time per host or group.
     - role: linux
 ```
 
-Tags: `timezone`, `ca_certificates`, `repositories`, `upgrade`, `packages`, `users`,
+Tags: `timezone`, `hosts`, `ca_certificates`, `repositories`, `upgrade`, `packages`, `users`,
 `ssh`, `ufw`, `storage`, `sysctl`, `limits` — plus `linux` for all of them.
 
 ```bash
@@ -214,6 +214,42 @@ linux_hwclock: UTC            # optional
 Cron is restarted afterwards because it only reads `/etc/localtime` at start-up.
 On systemd hosts `timedatectl` does not touch Debian's `/etc/timezone`, so the
 role keeps that file in sync itself.
+
+## /etc/hosts
+
+```yaml
+linux_hosts:
+  - {name: nas.lan, ip: 192.168.1.10}
+  - {name: nas, ip: 192.168.1.10}       # one name per entry
+  - {name: printer.lan, ip: "fd00::20"}
+```
+
+The entries go into a block of their own at the end of `/etc/hosts`:
+
+```
+# BEGIN ANSIBLE MANAGED BLOCK: linux_hosts
+192.168.1.10    nas.lan
+192.168.1.10    nas
+fd00::20        printer.lan
+# END ANSIBLE MANAGED BLOCK: linux_hosts
+```
+
+The block holds exactly what is listed: dropping an entry removes its line, and
+an empty list — the default — removes the block. That is why this step runs
+even when `linux_hosts` is empty; where the role never added a block, it leaves
+the file as it is. Lines outside the block are not touched, so a name that also
+appears in one of them (Debian's `127.0.1.1 <hostname>`, say) ends up with two
+addresses, and which one a program gets depends on how it resolves names —
+remove the other line if that is not what you want.
+
+Every entry is checked before the file is written: the resolver silently skips
+a line whose address it cannot parse. It runs before the
+[repositories](#packages-and-repositories) are configured, so their servers may
+be named here.
+
+cloud-init with `manage_etc_hosts: true` writes `/etc/hosts` from its template
+at every boot and drops the block until the role runs again; set it to `false`
+(or put the entries into `/etc/cloud/templates/hosts.*.tmpl`) on such hosts.
 
 ## CA certificates
 

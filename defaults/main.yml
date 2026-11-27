@@ -13,6 +13,16 @@ linux_hwclock: ""
 # Cron reads /etc/localtime at start-up only, so it is restarted after a change.
 linux_timezone_restart_cron: true
 
+# ── /etc/hosts ──────────────────────────────────────────────────────────────
+# Static entries, kept in a block of their own at the end of /etc/hosts. The
+# block holds exactly what is listed here: dropping an entry removes its line,
+# an empty list removes the block. Lines outside the block are left alone.
+# - name: nas.lan          # one host name per entry
+#   ip: 192.168.1.10       # IPv4 or IPv6 address
+# - name: nas
+#   ip: 192.168.1.10
+linux_hosts: []
+
 # ── Groups ──────────────────────────────────────────────────────────────────
 # - name: deploy
 #   gid: 1500          # optional

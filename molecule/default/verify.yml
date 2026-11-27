@@ -7,6 +7,15 @@
   hosts: all
   become: true
 
+  vars:
+    # The block converge.yml's linux_hosts makes.
+    verify_hosts_block: |
+      # BEGIN ANSIBLE MANAGED BLOCK: linux_hosts
+      192.168.1.10    nas.molecule.test
+      192.168.1.10    nas
+      fd00::20        printer.molecule.test
+      # END ANSIBLE MANAGED BLOCK: linux_hosts
+
   tasks:
     # ── Timezone ────────────────────────────────────────────────────────────
     - name: Read the timezone abbreviation in use
@@ -25,6 +34,74 @@
         that:
           - verify_tz.stdout in ['CET', 'CEST']
           - verify_etc_timezone is skipped or (verify_etc_timezone.content | b64decode) == "Europe/Berlin\n"
+        quiet: true
+
+    # ── /etc/hosts ──────────────────────────────────────────────────────────
+    # Ahead of the checks that run the role again: without linux_hosts, every
+    # such run removes the block.
+    - name: Read /etc/hosts
+      ansible.builtin.slurp:
+        src: /etc/hosts
+      register: verify_hosts
+
+    - name: Assert /etc/hosts holds the entries, and only those, in its block
+      ansible.builtin.assert:
+        that:
+          - verify_hosts_block in _hosts
+          - "'old.molecule.test' not in _hosts"
+          - _hosts is search('^192\.168\.1\.98 kept\.molecule\.test$', multiline=true)
+          - _hosts is search('^127\.0\.0\.1\s+localhost', multiline=true)
+        quiet: true
+      vars:
+        _hosts: "{{ verify_hosts.content | b64decode }}"
+
+    - name: Resolve a name from the block
+      ansible.builtin.command: getent hosts nas.molecule.test
+      register: verify_hosts_getent
+      changed_when: false
+
+    - name: Assert it resolves to the listed address
+      ansible.builtin.assert:
+        that: verify_hosts_getent.stdout.split() | first == '192.168.1.10'
+        quiet: true
+
+    # The resolver would skip such a line without a word.
+    - name: Configure an /etc/hosts entry without an address
+      block:
+        - name: Run the role with a host name in place of the address
+          ansible.builtin.include_role:
+            name: homelab.linux
+          vars:
+            linux_hosts:
+              - {name: nas.molecule.test, ip: nas.lan}
+
+        - name: Fail, the role went on
+          ansible.builtin.fail:
+            msg: The role accepted an /etc/hosts entry without an IP address.
+      rescue:
+        - name: Assert the role stopped at the entry check
+          ansible.builtin.assert:
+            that: >-
+              ansible_failed_result.results | map(attribute='msg', default='')
+              | select('search', '"nas.molecule.test" -> "nas.lan" is invalid') | list | length == 1
+            quiet: true
+
+    - name: Run the role with an empty linux_hosts
+      ansible.builtin.include_role:
+        name: homelab.linux
+      vars:
+        linux_hosts: []
+
+    - name: Read /etc/hosts again
+      ansible.builtin.slurp:
+        src: /etc/hosts
+      register: verify_hosts_emptied
+
+    - name: Assert the block is gone and the rest of the file is unchanged
+      ansible.builtin.assert:
+        that: >-
+          (verify_hosts_emptied.content | b64decode)
+          == (verify_hosts.content | b64decode | replace(verify_hosts_block, ''))
         quiet: true
 
     # ── CA certificates ─────────────────────────────────────────────────────

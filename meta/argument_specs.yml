@@ -11,9 +11,9 @@ argument_specs:
     short_description: Basic setup of Linux VMs
     description:
       - Configures users and groups, the SSH server, the UFW firewall, the
-        timezone, trusted CA certificates, packages and extra repositories,
-        package upgrades, partitions, LVM, filesystems and mounts, sysctl
-        settings and resource limits.
+        timezone, C(/etc/hosts) entries, trusted CA certificates, packages and
+        extra repositories, package upgrades, partitions, LVM, filesystems and
+        mounts, sysctl settings and resource limits.
       - Every feature is opt-in. With the defaults the role changes nothing.
       - Supports Debian- and RedHat-family hosts. The firewall is Ubuntu only.
     author:
@@ -40,6 +40,28 @@ argument_specs:
         description:
           - Restart cron after a timezone change. Cron reads C(/etc/localtime)
             at start-up only.
+
+      # ── /etc/hosts ────────────────────────────────────────────────────────
+      linux_hosts:
+        type: list
+        elements: dict
+        default: []
+        description:
+          - Static entries for C(/etc/hosts), kept in a block of their own at the
+            end of the file. Lines outside the block are left alone.
+          - The block holds exactly the listed entries. An entry dropped from the
+            list is removed from the file, an empty list removes the block.
+        options:
+          name:
+            type: str
+            required: true
+            description:
+              - A single host name, for example V(nas.lan). List an address
+                once per name to give it several.
+          ip:
+            type: str
+            required: true
+            description: The IPv4 or IPv6 address the name resolves to.
 
       # ── Groups ────────────────────────────────────────────────────────────
       linux_groups:

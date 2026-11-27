@@ -7,6 +7,13 @@
     # ── Timezone ────────────────────────────────────────────────────────────
     linux_timezone: Europe/Berlin
 
+    # ── /etc/hosts ──────────────────────────────────────────────────────────
+    # prepare.yml left a block with another entry, which has to go.
+    linux_hosts:
+      - {name: nas.molecule.test, ip: 192.168.1.10}
+      - {name: nas, ip: 192.168.1.10}
+      - {name: printer.molecule.test, ip: "fd00::20"}
+
     # ── CA certificates ─────────────────────────────────────────────────────
     linux_ca_certificates:
       - name: molecule-ca
