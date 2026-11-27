@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.0](https://github.com/shadowlordarholfromgothic2/ansible-role-linux/compare/1.2.0...1.3.0) (2026-11-27)
+
+
+### Features
+
+* add /etc/hosts entries ([8b704ed](https://github.com/shadowlordarholfromgothic2/ansible-role-linux/commit/8b704ed11f2df01919058db6059ede1122c9a61f))
+* add /etc/hosts entries ([305c8ae](https://github.com/shadowlordarholfromgothic2/ansible-role-linux/commit/305c8aead1f0dfd84d908781e46c4d48f0085c5e))
+
 ## [1.2.0](https://github.com/shadowlordarholfromgothic2/ansible-role-linux/compare/1.1.0...1.2.0) (2026-11-26)
 
 
